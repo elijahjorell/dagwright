@@ -46,11 +46,11 @@ execute.
 - Expect an LLM to be in the loop on the caller side to fill spec
   fields from AE context (notes, ticket, stakeholder request).
 - Deterministic planner produces ranked plans. A plan is an ordered
-  sequence of DAG operations drawn from the operation set already
-  defined in `~/dag-simulator/` (add / remove / rewire nodes and
-  edges, rename, change grain / materialization / layer, add or
-  modify tests, add or update contracts, etc. — the full vocabulary,
-  not just "add a model"). Each plan is annotated with:
+  sequence of DAG operations drawn from an operation vocabulary
+  vendored (copied) from `~/dag-simulator/` — add / remove / rewire
+  nodes and edges, rename, change grain / materialization / layer,
+  add or modify tests, add or update contracts, and so on; the full
+  vocabulary, not just "add a model." Each plan is annotated with:
   - operations to apply, in order
   - existing pathways reused vs. new construction
   - contracts affected (preserved, broken, newly required)
@@ -78,9 +78,14 @@ execute.
 
 - The planner **reads** existing state and **emits** plans. It does
   not build DAGs, mutate manifests, or validate generated SQL.
-- Contracts and invariants are **reused from `~/dag-simulator/`**;
-  do not re-derive in this repo. Depend on that work or vendor a
-  minimal subset; never reimplement.
+- Rule and invariant definitions are **vendored (copied as data) from
+  `~/dag-simulator/`**. Do not code-level depend on dag-simulator: no
+  imports, no git submodule, no shared package, no remote install.
+  Rewrite the engine (Z3 encoding, rule evaluation, plan ranking) from
+  scratch in this repo, using dag-simulator's definitions as the
+  source of truth for *what* the rules are, not *how* to execute
+  them. Research findings in dag-simulator propagate here by hand,
+  not by import.
 - New inputs require justification. The accepted inputs are: dbt
   manifest, BI-tool consumer graph, dagwright-spec. Anything else
   (dbt sources, SQL linting, lineage tools) is deferred until a
@@ -108,8 +113,10 @@ The project stops or rescopes if any of these become true:
 
 ## Related repos
 
-- `~/dag-simulator/` — source of rules, invariants, contracts,
-  manifest loader, Z3 solver. dagwright depends on this research.
+- `~/dag-simulator/` — research testbed for rules, invariants, and
+  contracts. dagwright vendors rule and invariant *definitions* from
+  here; it does not code-level depend on this repo. Empirically
+  validated findings move over by hand.
 - `~/ai-lab/` — research lab; findings inform dagwright's design
   (spec-layer decisions, LLM placement).
 - `~/plaid-finance/` — potential personal test-bed dbt project once
