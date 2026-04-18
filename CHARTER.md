@@ -45,12 +45,19 @@ execute.
   progressive fields (minimal required, more if ambiguity demands it).
 - Expect an LLM to be in the loop on the caller side to fill spec
   fields from AE context (notes, ticket, stakeholder request).
-- Deterministic planner produces ranked plans with:
-  - models to add
-  - models to reuse
-  - contracts affected
-  - invariant check results
-  - tradeoffs between plans
+- Deterministic planner produces ranked plans. A plan is an ordered
+  sequence of DAG operations drawn from the operation set already
+  defined in `~/dag-simulator/` (add / remove / rewire nodes and
+  edges, rename, change grain / materialization / layer, add or
+  modify tests, add or update contracts, etc. — the full vocabulary,
+  not just "add a model"). Each plan is annotated with:
+  - operations to apply, in order
+  - existing pathways reused vs. new construction
+  - contracts affected (preserved, broken, newly required)
+  - invariant check results (which rules hold after the plan applies)
+  - downstream impact (models and BI-tool consumers affected)
+  - estimated effort / complexity
+  - tradeoffs vs. alternative plans
 - Output: JSON (machine-readable) + markdown (human-readable).
 - Distribution: CLI tool. `dagwright plan --spec foo.yaml --manifest target/manifest.json [--bi metabase.json]`.
 
