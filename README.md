@@ -11,6 +11,8 @@ execute them.
 
 See `CHARTER.md` for aim, scope, boundaries, kill criteria.
 See `METRIC.md` for target trajectory.
+See `PLANNER_NOTES.md` for the planner's current bounds and planned
+widenings — read before trusting a "no plans" output.
 
 ## Status
 
