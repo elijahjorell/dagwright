@@ -1,6 +1,6 @@
-# Vendored from dag-simulator. Three valid ways a child node's grain
-# can derive from at least one of its parents' grains. Used by I2 to
-# determine whether a proposed grain is reachable.
+# Three valid ways a child node's grain can derive from at least one
+# of its parents' grains. Used by I2 to determine whether a proposed
+# grain is reachable.
 #
 # A child with multiple parents must reach its grain from at least
 # one parent. If reachable from none, the grain is conflicted (I2
@@ -31,7 +31,3 @@ morphisms:
 # parent's effective grain (raw + derivable) before evaluating the
 # three morphisms above. Document the resolution here when first
 # encountered (the new_customers_monthly fixture will force this).
-#
-# Provenance:
-#   ~/dag-simulator/CLAUDE.md ("Grain reachability")
-#   ~/Documents/data-architecture-math/02-grain-theory.md

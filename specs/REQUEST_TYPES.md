@@ -4,8 +4,7 @@ Taxonomy of stakeholder requests AEs receive against an analytics DAG.
 Each entry is a candidate `kind` for a dagwright-spec. This is the
 **input ontology** (what stakeholders ask). The **output ontology**
 (DAG operations the planner emits — add/remove/rewire nodes, change
-grain, etc.) is separate and lives in the operation vocabulary
-vendored from `~/dag-simulator/`.
+grain, etc.) is separate and lives in `catalog/operations.yaml`.
 
 Listed for design context. A type is only official once it has a
 concrete fixture example and a payload schema in `specs/schema.md`.

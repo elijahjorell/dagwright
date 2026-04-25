@@ -246,7 +246,7 @@ Revisit before changing any of them.
 - **Grain keys are implicit columns of the result.** Don't list them
   in `columns`. The result table's full schema is `grain.keys` ∪
   `[c.name for c in columns]`.
-- **Grain is a flat list of column names.** Matches dag-simulator's
+- **Grain is a flat list of column names.** Matches the catalog's
   grain model and SQL `GROUP BY`. No `{entity, time}` structuring —
   premature ontology. Time-likeness is determined by the key being
   one of `{day, week, month, quarter, year}`, not by structural

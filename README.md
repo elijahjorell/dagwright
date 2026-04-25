@@ -54,9 +54,8 @@ See `specs/schema.md` for the spec shape.
 ## Structure
 
 - `dagwright/` — the planner package (Python).
-- `catalog/` — vendored from dag-simulator as data: layers,
-  invariants, contracts, operations, grain morphisms. No code-level
-  dependency on dag-simulator.
+- `catalog/` — layers, invariants, contracts, operations, grain
+  morphisms. Treated as data, read by the planner.
 - `specs/` — spec schema documentation.
 - `tests/` — OSS dbt projects as fixtures (jaffle_shop first).
 

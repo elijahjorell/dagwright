@@ -1,12 +1,11 @@
-# Vendored from dag-simulator. The planner emits plans as ordered
-# sequences of these operations. v0 vendors the 6 atomic operations
-# plus the contract operations the planner needs to declare new
-# C1/C2/C3 promises.
+# The planner emits plans as ordered sequences of these operations.
+# v0 includes the 6 atomic operations plus the contract operations
+# the planner needs to declare new C1/C2/C3 promises.
 #
-# Compound operations (22 in math doc 04 — source migration,
-# decommission cascade, schema change, new mart, etc.) decompose into
-# atomics. Vendor a compound when a fixture's plan reads more
-# clearly with it than with the equivalent atomic sequence.
+# Compound operations (e.g. source migration, decommission cascade,
+# schema change, new mart) decompose into atomics. Add a compound
+# when a fixture's plan reads more clearly with it than with the
+# equivalent atomic sequence.
 
 atomics:
   - id: add_node
@@ -39,9 +38,9 @@ atomics:
       Change an edge's transform_type, column_lineage, or
       cardinality.
 
-# Plan-level operations not in dag-simulator's atomic algebra but
-# needed for annotated plans (the planner emits these alongside the
-# structural atomics):
+# Plan-level operations beyond the structural atomics, needed for
+# annotated plans (the planner emits these alongside the structural
+# atomics):
 
 contract_operations:
   - id: add_contract
@@ -57,11 +56,3 @@ contract_operations:
       Remove a contract. Never emitted by the planner without an
       explicit retire-contract instruction in the spec; reserved for
       future deprecation/definitional_change types.
-
-# Provenance:
-#   ~/dag-simulator/core.py (6 atomic operations; modify_node /
-#     modify_edge accept arbitrary property maps)
-#   ~/Documents/data-architecture-math/04-dag-operations-algebra.md
-#     (5 atomics + 22 compounds — atomic count differs from
-#     dag-simulator's 6 because the math doc treats modify as a
-#     compound; dagwright follows the simulator's count)

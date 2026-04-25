@@ -98,10 +98,10 @@ fixture forces.
 
 ## When the hand-coded engine gets retired
 
-CHARTER calls for a Z3-based engine: "Rewrite the engine (Z3
-encoding, rule evaluation, plan ranking) from scratch in this repo,
-using dag-simulator's definitions as the source of truth for *what*
-the rules are, not *how* to execute them."
+CHARTER calls for a Z3-based engine: rule evaluation and plan
+ranking implemented from scratch, with the catalog as the source of
+truth for *what* the rules are and the engine as the source of truth
+for *how* to execute them.
 
 The hand-coded planner stretches further than expected because v0
 plan shapes are structurally simple (add a MART downstream of one

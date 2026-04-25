@@ -1,11 +1,10 @@
-# Vendored from dag-simulator. Contracts are declared promises about
-# specific (node, consumer) pairs. The planner emits new contracts
-# when a metric_request specifies a consumer, and annotates plans
-# with which existing contracts are preserved / broken / newly required.
+# Contracts are declared promises about specific (node, consumer)
+# pairs. The planner emits new contracts when a metric_request
+# specifies a consumer, and annotates plans with which existing
+# contracts are preserved / broken / newly required.
 #
-# Contracts are HARD constraints in dag-simulator's Z3 healer — they
-# are never silently retired. dagwright preserves that posture: a
-# plan that breaks a contract must declare so explicitly and is
+# Contracts are HARD constraints — they are never silently retired.
+# A plan that breaks a contract must declare so explicitly and is
 # down-ranked accordingly.
 
 contracts:
@@ -39,9 +38,5 @@ tiers:
   - id: best_effort
     statement: Breaking is flagged but does not block the plan.
 
-# Provenance:
-#   ~/dag-simulator/core.py (contract checkers C1-C6 — only C1, C2, C3
-#     have stable definitions in CLAUDE.md; C4-C6 deferred until a
-#     fixture demands them)
-#   ~/dag-simulator/CLAUDE.md ("Contracts are hard constraints",
-#     "Invariant and contract enforcement")
+# C1, C2, C3 are the stable contract types. Additional types are
+# deferred until a fixture demands them.

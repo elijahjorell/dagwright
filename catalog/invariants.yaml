@@ -1,13 +1,12 @@
-# Vendored from dag-simulator. Structural correctness conditions on
-# the DAG. The planner annotates each emitted plan with which
-# invariants hold after the plan applies.
+# Structural correctness conditions on the DAG. The planner
+# annotates each emitted plan with which invariants hold after the
+# plan applies.
 #
 # Two classes:
 #   structural  — enforced by the data structure; cannot be violated
 #                 in a properly-implemented core (e.g. I1 acyclicity).
-#   operational — enforced by per-operation guards in dag-simulator;
-#                 dagwright treats all of them as required for any
-#                 plan it emits.
+#   operational — required for any plan dagwright emits; checked by
+#                 the engine.
 
 invariants:
   - id: I1
@@ -69,12 +68,6 @@ invariants:
       An edge's transform_type must be valid for its
       (parent_layer, child_layer) pair.
 
-# Violation ownership (dag-simulator F-series findings):
+# Violation ownership:
 #   I1 / I2 / I3 / I4 / I6 / contracts → owned by node
 #   I5 / E2 / E3                       → owned by edge
-#
-# Provenance:
-#   ~/dag-simulator/core.py (invariant checkers)
-#   ~/dag-simulator/CLAUDE.md ("Two classes of invariant",
-#     "Violation ownership operates at three layers")
-#   ~/Documents/data-architecture-math/06-integrity-and-healing.md
