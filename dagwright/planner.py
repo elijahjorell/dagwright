@@ -931,10 +931,17 @@ def _plan_replace_in_place(
         and cs.column == spec.target_column
         and "SEMANTIC RISK" in cs.note
     })
+    downstream_models = sorted(dag.descendants(spec.target_node))
     blast = {
         "scheme": "redefine column in place; meaning changes for all readers",
         "must_migrate_satisfied": list(spec.must_migrate),
         "existing_artifacts_affected": silent_consumers,
+        # Internal dbt propagation: every descendant model of the
+        # target_node may compute different values after this plan
+        # because target_column's meaning has changed. The planner
+        # cannot know without SQL inspection which descendants
+        # actually reference target_column — so the AE must audit.
+        "downstream_dbt_models": downstream_models,
     }
     notes: list[str] = []
     if silent_consumers:
@@ -943,13 +950,21 @@ def _plan_replace_in_place(
             "must_migrate. Their numbers change silently. Confirm intent before "
             "executing."
         )
+    if downstream_models:
+        notes.append(
+            f"{len(downstream_models)} downstream dbt model(s) depend on "
+            f"`{spec.target_node}` and may compute different values after "
+            "this plan. The planner does not parse SQL — audit each "
+            f"descendant for whether it references `{spec.target_column}` "
+            "before merging."
+        )
     return DefinitionalChangePlan(
         shape="replace_in_place",
         operations=operations,
         contract_status=contract_status,
         blast_radius=blast,
         effort=len(operations),
-        score=_score_change_plan("replace_in_place", operations, contract_status),
+        score=_score_change_plan("replace_in_place", operations, contract_status, blast),
         semantic_summary=(
             f"Redefine `{spec.target_node}.{spec.target_column}` from "
             f"`{spec.old_definition.expr}` ({spec.old_definition.basis}) to "
@@ -1002,6 +1017,10 @@ def _plan_add_versioned_column(
         ),
         "must_migrate_satisfied": list(spec.must_migrate),
         "existing_artifacts_affected": [],
+        # Adding a column doesn't change existing column semantics;
+        # existing downstream models that read existing columns are
+        # unaffected. The new column has no readers yet.
+        "downstream_dbt_models": [],
     }
     notes = [
         f"Old column `{spec.target_column}` retains its current definition. "
@@ -1018,7 +1037,7 @@ def _plan_add_versioned_column(
         contract_status=contract_status,
         blast_radius=blast,
         effort=len(operations),
-        score=_score_change_plan("add_versioned_column", operations, contract_status),
+        score=_score_change_plan("add_versioned_column", operations, contract_status, blast),
         semantic_summary=(
             f"Add new column `{spec.target_node}.{new_col}` carrying the "
             f"{spec.new_definition.basis} definition (`{spec.new_definition.expr}`). "
@@ -1091,6 +1110,9 @@ def _plan_versioned_mart(
         ),
         "must_migrate_satisfied": list(spec.must_migrate),
         "existing_artifacts_affected": [],
+        # Original node is unchanged; existing downstream of
+        # spec.target_node continues to compute the old definition.
+        "downstream_dbt_models": [],
     }
     notes = [
         "Versioned-mart pattern. Heaviest plan; choose this when many "
@@ -1103,7 +1125,7 @@ def _plan_versioned_mart(
         contract_status=contract_status,
         blast_radius=blast,
         effort=len(operations),
-        score=_score_change_plan("versioned_mart", operations, contract_status),
+        score=_score_change_plan("versioned_mart", operations, contract_status, blast),
         semantic_summary=(
             f"Build `{new_node}` as a parallel of `{spec.target_node}` with "
             f"`{spec.target_column}` redefined to `{spec.new_definition.expr}` "
@@ -1156,6 +1178,9 @@ def _plan_consumer_only(
         ),
         "must_migrate_satisfied": list(spec.must_migrate),
         "existing_artifacts_affected": [],
+        # No dbt change; existing downstream models are entirely
+        # unaffected.
+        "downstream_dbt_models": [],
     }
     notes = [
         f"Smallest possible plan. The {spec.new_definition.basis} basis is "
@@ -1168,7 +1193,7 @@ def _plan_consumer_only(
         contract_status=contract_status,
         blast_radius=blast,
         effort=len(operations),
-        score=_score_change_plan("consumer_only", operations, contract_status),
+        score=_score_change_plan("consumer_only", operations, contract_status, blast),
         semantic_summary=(
             f"Repoint must_migrate consumer(s) to read "
             f"`{spec.target_node}.{expr}`, which already carries the "
@@ -1182,6 +1207,7 @@ def _score_change_plan(
     shape: str,
     operations: list[Operation],
     contract_status: list[ContractStatus],
+    blast_radius: dict,
 ) -> float:
     """Higher = better.
 
@@ -1189,6 +1215,13 @@ def _score_change_plan(
     -1 per operation (effort)
     -5 per held=False contract (a must_migrate consumer left on old definition)
     -2 per SEMANTIC RISK note (silent meaning change for non-must_migrate consumer)
+    -0.3 per downstream dbt model (capped at -3.0): in-place plans
+       silently propagate to every descendant, and each descendant
+       is real audit work for the AE. Shapes that don't modify
+       existing nodes (consumer_only, add_versioned_column,
+       versioned_mart) report empty downstream_dbt_models and pay
+       nothing — so any non-zero descendant count is enough to tip
+       the ranking toward consumer_only when it's feasible.
     Shape preferences:
     +1 consumer_only (no dbt change is genuinely cheaper)
     +0.5 replace_in_place (single op, single-meaning end state)
@@ -1198,10 +1231,19 @@ def _score_change_plan(
     effort_penalty = 1.0 * len(operations)
     violations = sum(1 for cs in contract_status if not cs.held)
     silent = sum(1 for cs in contract_status if "SEMANTIC RISK" in cs.note)
+    downstream = blast_radius.get("downstream_dbt_models") or []
+    downstream_penalty = min(3.0, 0.3 * len(downstream))
     shape_bonus = {
         "consumer_only": 1.0,
         "replace_in_place": 0.5,
         "add_versioned_column": 0.0,
         "versioned_mart": -0.5,
     }.get(shape, 0.0)
-    return base - effort_penalty - 5.0 * violations - 2.0 * silent + shape_bonus
+    return (
+        base
+        - effort_penalty
+        - 5.0 * violations
+        - 2.0 * silent
+        - downstream_penalty
+        + shape_bonus
+    )

@@ -256,6 +256,16 @@ def _render_dc_plan_md(rank: int, plan: DefinitionalChangePlan) -> list[str]:
         f"- artifacts at risk: "
         f"{', '.join(f'`{a}`' for a in affected) or '_(none)_'}"
     )
+    downstream = blast.get("downstream_dbt_models") or []
+    if downstream:
+        head = ", ".join(f"`{n}`" for n in downstream[:8])
+        suffix = "" if len(downstream) <= 8 else f", + {len(downstream) - 8} more"
+        out.append(
+            f"- downstream dbt models potentially affected "
+            f"({len(downstream)}): {head}{suffix}"
+        )
+    else:
+        out.append("- downstream dbt models potentially affected: _(none)_")
     out.append("")
 
     if plan.notes:
