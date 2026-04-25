@@ -1,0 +1,29 @@
+# Vendored from dag-simulator. Each node lives in exactly one layer.
+# Edges between layers must satisfy the edge_transitions matrix below.
+# Sources are a boundary (no parents, only feed staging), not a
+# normal layer participant.
+
+layers:
+  - id: SOURCE
+    description: External data; precedes the DAG. Never has parents.
+  - id: STAGING
+    description: One-to-one with sources; column rename + type coercion.
+  - id: INTERMEDIATE
+    description: Reusable transformations; joins, filters, aggregations.
+  - id: MART
+    description: Business-facing models consumed by BI.
+  - id: EXPOSURE
+    description: Downstream artifact (dashboard, report, ML model).
+
+# from -> to allowed?
+edge_transitions:
+  SOURCE:       {SOURCE: false, STAGING: true,  INTERMEDIATE: false, MART: false, EXPOSURE: false}
+  STAGING:      {SOURCE: false, STAGING: false, INTERMEDIATE: true,  MART: true,  EXPOSURE: false}
+  INTERMEDIATE: {SOURCE: false, STAGING: false, INTERMEDIATE: true,  MART: true,  EXPOSURE: false}
+  MART:         {SOURCE: false, STAGING: false, INTERMEDIATE: false, MART: true,  EXPOSURE: true}
+  EXPOSURE:     {SOURCE: false, STAGING: false, INTERMEDIATE: false, MART: false, EXPOSURE: false}
+
+# Provenance:
+#   ~/dag-simulator/CLAUDE.md ("The valid edge type matrix",
+#     "Sources are a boundary, not a layer")
+#   ~/dag-simulator/core.py

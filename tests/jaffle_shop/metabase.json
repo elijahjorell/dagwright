@@ -1,0 +1,29 @@
+{
+  "tool": "metabase",
+  "artifacts": [
+    {
+      "id": "executive_overview",
+      "kind": "dashboard",
+      "consumes": [
+        {
+          "node": "customers",
+          "columns": ["customer_id", "first_name", "last_name", "first_order", "number_of_orders", "customer_lifetime_value"]
+        },
+        {
+          "node": "orders",
+          "columns": ["order_id", "customer_id", "order_date", "amount", "status"]
+        }
+      ]
+    },
+    {
+      "id": "ops_open_orders",
+      "kind": "question",
+      "consumes": [
+        {
+          "node": "orders",
+          "columns": ["order_id", "customer_id", "order_date", "status"]
+        }
+      ]
+    }
+  ]
+}

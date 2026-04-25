@@ -1,0 +1,37 @@
+# Vendored from dag-simulator. Three valid ways a child node's grain
+# can derive from at least one of its parents' grains. Used by I2 to
+# determine whether a proposed grain is reachable.
+#
+# A child with multiple parents must reach its grain from at least
+# one parent. If reachable from none, the grain is conflicted (I2
+# violation) and the plan is invalid.
+
+morphisms:
+  - id: preserve
+    statement: child_grain_keys == parent_grain_keys
+    sql_pattern: same-key join, column transform, no aggregation
+    cardinality: one_to_one
+
+  - id: coarsen
+    statement: child_grain_keys ⊂ parent_grain_keys
+    sql_pattern: GROUP BY a strict subset of parent grain
+    cardinality: many_to_one
+
+  - id: refine
+    statement: parent_grain_keys ⊂ child_grain_keys
+    sql_pattern: fan-out join introducing additional grain keys
+    cardinality: one_to_many
+
+# Open question (deferred): real-world plans need to handle DERIVED
+# grain columns — e.g., a `month` grain column derived via
+# date_trunc from a parent's `first_order` date column. The parent's
+# raw grain is `[customer_id]`; the derived effective grain is
+# `[customer_id, first_order_month]`, which makes `[month]` a valid
+# coarsen target. The planner will need a step that computes a
+# parent's effective grain (raw + derivable) before evaluating the
+# three morphisms above. Document the resolution here when first
+# encountered (the new_customers_monthly fixture will force this).
+#
+# Provenance:
+#   ~/dag-simulator/CLAUDE.md ("Grain reachability")
+#   ~/Documents/data-architecture-math/02-grain-theory.md

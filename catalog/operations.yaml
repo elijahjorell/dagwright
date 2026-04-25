@@ -1,0 +1,67 @@
+# Vendored from dag-simulator. The planner emits plans as ordered
+# sequences of these operations. v0 vendors the 6 atomic operations
+# plus the contract operations the planner needs to declare new
+# C1/C2/C3 promises.
+#
+# Compound operations (22 in math doc 04 — source migration,
+# decommission cascade, schema change, new mart, etc.) decompose into
+# atomics. Vendor a compound when a fixture's plan reads more
+# clearly with it than with the equivalent atomic sequence.
+
+atomics:
+  - id: add_node
+    args: [name, layer, grain, schema, materialization]
+    description: Create a new node in the DAG.
+
+  - id: drop_node
+    args: [name]
+    description: >
+      Remove a node. DPO-style — requires no incident edges (caller
+      must drop edges first, or the operation is blocked).
+
+  - id: add_edge
+    args: [parent, child, transform_type, column_lineage, cardinality]
+    description: Add a parent-child edge with relationship properties.
+
+  - id: drop_edge
+    args: [parent, child]
+    description: Remove an edge.
+
+  - id: modify_node
+    args: [name, properties]
+    description: >
+      Change a node's layer, grain, schema, or materialization.
+      Properties is a map of fields to change.
+
+  - id: modify_edge
+    args: [parent, child, properties]
+    description: >
+      Change an edge's transform_type, column_lineage, or
+      cardinality.
+
+# Plan-level operations not in dag-simulator's atomic algebra but
+# needed for annotated plans (the planner emits these alongside the
+# structural atomics):
+
+contract_operations:
+  - id: add_contract
+    args: [node, consumer, contract_id, terms, tier]
+    description: >
+      Declare a new contract (C1, C2, or C3) on a (node, consumer)
+      pair. Emitted automatically when a metric_request supplies a
+      consumer.
+
+  - id: drop_contract
+    args: [node, consumer, contract_id]
+    description: >
+      Remove a contract. Never emitted by the planner without an
+      explicit retire-contract instruction in the spec; reserved for
+      future deprecation/definitional_change types.
+
+# Provenance:
+#   ~/dag-simulator/core.py (6 atomic operations; modify_node /
+#     modify_edge accept arbitrary property maps)
+#   ~/Documents/data-architecture-math/04-dag-operations-algebra.md
+#     (5 atomics + 22 compounds — atomic count differs from
+#     dag-simulator's 6 because the math doc treats modify as a
+#     compound; dagwright follows the simulator's count)
