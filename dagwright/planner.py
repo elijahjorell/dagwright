@@ -103,6 +103,15 @@ def plan_metric_request(
     rejections: list[Rejection] = []
 
     required_source_columns = _required_source_columns(spec.output_shape)
+    dense_keys = _dense_grain_keys(spec)
+
+    if len(dense_keys) > 1:
+        # v0 supports a single dense key. The current fixture exercises
+        # this and PLANNER_NOTES tracks the multi-spine widening.
+        raise NotImplementedError(
+            f"v0 supports at most one dense grain key; got {dense_keys}. "
+            "Multi-spine support is a planned widening (PLANNER_NOTES.md)."
+        )
 
     for parent_name in sorted(dag.nodes):
         node = dag.nodes[parent_name]
@@ -142,10 +151,20 @@ def plan_metric_request(
             continue
 
         for combo in resolution_combos:
-            plan = build_plan(dag, cg, spec, parent_name, combo)
+            if dense_keys:
+                plan = build_dense_plan(dag, cg, spec, parent_name, combo, dense_keys[0])
+            else:
+                plan = build_plan(dag, cg, spec, parent_name, combo)
             plans.append(plan)
 
     return plans, rejections
+
+
+def _dense_grain_keys(spec: MetricRequest) -> list[str]:
+    """Grain keys whose coverage is declared dense. Returned in
+    grain.keys order so the spine name is deterministic."""
+    coverage = spec.output_shape.grain.coverage
+    return [k for k in spec.output_shape.grain.keys if k in coverage and coverage[k].dense]
 
 
 def _required_source_columns(output_shape: OutputShape) -> list[str]:
@@ -303,19 +322,199 @@ def build_plan(
             + ", ".join(f"{gr.grain_key} (from {parent_name}.{gr.source_column})" for gr in derived)
             + " — verify the source column is the intended one for this metric."
         )
-    # If any grain key was declared dense in the spec, the planner does
-    # not yet emit a date-spine companion. PLANNER_NOTES.md "Planned
-    # widenings" tracks this; surfacing it as a note keeps the human
-    # reviewer honest until phase B lands.
-    dense_keys = [k for k, cov in spec.output_shape.grain.coverage.items() if cov.dense]
-    if dense_keys:
+    if blast["new_artifact"] not in [a.id for a in cg.artifacts.values()]:
         notes.append(
-            f"Spec requests dense coverage on {dense_keys}, but this plan "
-            f"uses raw GROUP BY without a date-spine companion node — months "
-            f"with no underlying events will be absent from the result. "
-            f"See PLANNER_NOTES.md (planned widening: multi-parent "
-            f"enumeration + scaffolding-node generation)."
+            f"Consumer {spec.consumer.artifact!r} is not yet in the "
+            f"{cg.tool or 'BI'} consumer graph; the plan assumes it will be "
+            "created externally as part of execution."
         )
+
+    return Plan(
+        parent=parent_name,
+        grain_resolutions=grain_resolution,
+        operations=operations,
+        invariants=invariants,
+        pathways_reused=pathways_reused,
+        new_construction=new_construction,
+        blast_radius=blast,
+        effort=effort,
+        score=score,
+        semantic_summary=semantic_summary,
+        notes=notes,
+    )
+
+
+def build_dense_plan(
+    dag: DagState,
+    cg: ConsumerGraph,
+    spec: MetricRequest,
+    parent_name: str,
+    grain_resolution: list[GrainResolution],
+    dense_key: str,
+) -> Plan:
+    """Like build_plan but emits a date-spine companion node and a
+    LEFT JOIN edge so that every value of `dense_key` in the
+    declared range appears as a row, even when no underlying event
+    matches. The aggregation edge carries a `join_to_spine` arg
+    capturing the spine column → source-derivation pairing and the
+    fill values for missing buckets."""
+    parent = dag.nodes[parent_name]
+    new_node_name = spec.name
+    grain_keys = list(spec.output_shape.grain.keys)
+    column_names = [c.name for c in spec.output_shape.columns]
+    new_schema = grain_keys + column_names
+    coverage = spec.output_shape.grain.coverage[dense_key]
+
+    spine_name = f"date_spine_{dense_key}"
+
+    # Locate the grain resolution for the dense key so we know which
+    # parent column to join the spine against.
+    dense_resolution = next(gr for gr in grain_resolution if gr.grain_key == dense_key)
+    if dense_resolution.via == "direct":
+        join_source_expr = f"{parent_name}.{dense_key}"
+    else:
+        join_source_expr = (
+            f"date_trunc('{dense_key}', {parent_name}.{dense_resolution.source_column})"
+        )
+
+    fill_values = {c.name: coverage.fill for c in spec.output_shape.columns if coverage.fill is not None}
+
+    # Lineage on the aggregation edge: only the measure columns. The
+    # grain key on the result comes from the spine via the LEFT JOIN.
+    agg_lineage = {c.name: _column_expr(c, parent_name) for c in spec.output_shape.columns}
+    spine_lineage = {dense_key: f"{spine_name}.{dense_key}"}
+    # Non-dense grain keys (entity grains) come from the aggregation
+    # source via column_lineage just like in the sparse path.
+    for gr in grain_resolution:
+        if gr.grain_key == dense_key:
+            continue
+        if gr.via == "direct":
+            agg_lineage[gr.grain_key] = f"{parent_name}.{gr.expr}"
+        else:
+            agg_lineage[gr.grain_key] = gr.expr.replace(
+                gr.source_column, f"{parent_name}.{gr.source_column}"
+            )
+
+    operations: list[Operation] = [
+        Operation(
+            op="add_node",
+            args={
+                "name": spine_name,
+                "layer": "INTERMEDIATE",
+                "grain": [dense_key],
+                "schema": [dense_key],
+                "materialization": "view",
+                "range_from": coverage.range.from_,
+                "range_to": coverage.range.to,
+                "note": (
+                    f"date_spine generator: one row per {dense_key} from "
+                    f"{coverage.range.from_} to {coverage.range.to}. "
+                    "Implemented in dbt via dbt_utils.date_spine or equivalent."
+                ),
+            },
+        ),
+        Operation(
+            op="add_node",
+            args={
+                "name": new_node_name,
+                "layer": "MART",
+                "grain": grain_keys,
+                "schema": new_schema,
+                "materialization": "table",
+            },
+        ),
+        Operation(
+            op="add_edge",
+            args={
+                "parent": spine_name,
+                "child": new_node_name,
+                "transform_type": "left_join_axis",
+                "column_lineage": spine_lineage,
+                "cardinality": "one_to_one",
+                "filters": [],
+            },
+        ),
+        Operation(
+            op="add_edge",
+            args={
+                "parent": parent_name,
+                "child": new_node_name,
+                "transform_type": "aggregation",
+                "column_lineage": agg_lineage,
+                "cardinality": "many_to_one",
+                "filters": list(spec.filters),
+                "join_to_spine": {
+                    "spine": spine_name,
+                    "on": {f"{spine_name}.{dense_key}": join_source_expr},
+                    "fill": fill_values,
+                },
+            },
+        ),
+        Operation(
+            op="add_contract",
+            args={
+                "node": new_node_name,
+                "consumer": spec.consumer.artifact,
+                "contract_id": "C1",
+                "terms": {"columns": new_schema},
+                "tier": spec.contract_tier,
+            },
+        ),
+        Operation(
+            op="add_contract",
+            args={
+                "node": new_node_name,
+                "consumer": spec.consumer.artifact,
+                "contract_id": "C2",
+                "terms": {"grain_entity": "_".join(grain_keys)},
+                "tier": spec.contract_tier,
+            },
+        ),
+    ]
+
+    invariants = check_invariants(parent, grain_resolution)
+    invariants.append(
+        InvariantCheck(
+            id="I5b",
+            holds=True,
+            note=f"INTERMEDIATE -> MART permitted by edge transitions ({spine_name} -> {new_node_name}).",
+        )
+    )
+
+    pathways_reused = [parent_name] + sorted(dag.ancestors(parent_name))
+    # Convention: target mart first, scaffolding nodes after. The
+    # operations list still emits scaffolding first (execution order);
+    # this list is for display ("what's new" — target leads).
+    new_construction = [new_node_name, spine_name]
+
+    blast = compute_blast_radius(dag, cg, parent_name, spec.consumer.artifact)
+
+    effort = len(operations) + len(new_construction)
+
+    score = score_plan(parent, grain_resolution, blast, effort)
+
+    semantic_summary = (
+        f"{spec.name} computed from {parent.name}, joined LEFT against a "
+        f"date_spine on {dense_key} so every {dense_key} from "
+        f"{coverage.range.from_} to {coverage.range.to} appears as a row "
+        f"(missing buckets fill {column_names} with "
+        f"{coverage.fill if coverage.fill is not None else 'null'})."
+    )
+
+    notes: list[str] = []
+    if any(gr.via == "derived" for gr in grain_resolution):
+        derived = [gr for gr in grain_resolution if gr.via == "derived"]
+        notes.append(
+            "Time grain"
+            + ("s " if len(derived) > 1 else " ")
+            + ", ".join(f"{gr.grain_key} (from {parent_name}.{gr.source_column})" for gr in derived)
+            + " — verify the source column is the intended one for this metric."
+        )
+    notes.append(
+        f"If a date spine for `{dense_key}` already exists in your project, "
+        f"skip the first add_node operation and reference the existing spine "
+        f"in the LEFT JOIN edge."
+    )
     if blast["new_artifact"] not in [a.id for a in cg.artifacts.values()]:
         notes.append(
             f"Consumer {spec.consumer.artifact!r} is not yet in the "
