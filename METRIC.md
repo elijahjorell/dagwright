@@ -47,6 +47,7 @@ the highest scope reached and how often.
 |------------|------------------------|-------|
 | 2026-04-18 | none                   | Charter written, no code yet. |
 | 2026-04-24 | n=1 (single-spec)      | `dagwright plan` produces ranked plans for `new_customers_monthly` against `jaffle_shop`. Plan 1 (parent=customers, grain via first_order) is executable: correct semantics, all engaged invariants hold, no existing-artifact risk. April 30 kill-criterion hit 6 days early. |
+| 2026-04-25 | n=1 (single-spec) on realistic project | `dagwright plan` produces four ranked plans for `dau_desktop_only` (definitional_change kind) against `mattermost-analytics` (302-model real-world manifest, 12 dbt exposures used as BI graph). Plans 1 (replace_in_place) and 2 (consumer_only) are both executable in their respective shapes. Surfaced three product gaps to file: downstream-dbt effects missing from blast radius, ranking undervalues consumer_only, versioned-mart edge typing still rough. Sits between the April n=1 milestone and the June multi-spec milestone — first time dagwright has been validated on a manifest at the charter's target scale. |
 
 ## Leading indicators (track when relevant)
 
