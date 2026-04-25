@@ -1,0 +1,27 @@
+[project]
+name = "dagwright"
+version = "0.0.1"
+description = "Architectural change planner for analytics engineers."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+dagwright = "dagwright.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dagwright"]
+
+# Catalog YAML files ship with the wheel so the planner can locate
+# them via importlib.resources at runtime.
+[tool.hatch.build]
+include = [
+    "dagwright/**",
+    "catalog/**",
+]
