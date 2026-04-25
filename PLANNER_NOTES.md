@@ -42,10 +42,14 @@ them to be enumerated:
    only if it appears in the `.yml` columns block. SQL-only columns
    (e.g. `stg_orders.customer_id` in jaffle_shop, which the SQL
    selects but the docs don't list) are invisible.
-5. **Date detection by heuristic.** A column is "date-like" only if
-   its name contains one of `{date, time, timestamp, _at, _on}` OR
-   its description contains one of `{date, timestamp, datetime}`.
-   Date columns the heuristic misses are invisible.
+5. **Date detection by heuristic.** A column is "date-like" iff:
+   one of `{date, time, timestamp, datetime}` appears as a whole
+   `_`-delimited token in its name (so `event_time` matches but
+   `count_lifetime_orders` does not); OR the name ends with `_at`
+   or `_on`; OR `Date` / `Timestamp` / `Datetime` appears
+   case-sensitively as a whole word in its description (catches
+   "Date of customer's first order" but not idiomatic "...to
+   date."). Date columns the heuristic misses are invisible.
 6. **Fixed operation template.** Each plan emits exactly four
    operations in a fixed order: `add_node` (the mart) → `add_edge`
    (parent → mart) → `add_contract C1` (schema) → `add_contract C2`

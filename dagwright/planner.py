@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,12 +15,21 @@ from dagwright.state import (
 # Time grains the planner knows how to derive from a date-like column.
 TIME_GRAINS = ("day", "week", "month", "quarter", "year")
 
-# Column-name substrings that suggest a date/timestamp.
-DATE_NAME_HINTS = ("date", "time", "timestamp", "_at", "_on")
+# Whole `_`-delimited tokens in a column name that mark it date-like.
+# Token-equal (not substring) so `lifetime` / `runtime` / `datetime_col`
+# don't false-positive via the `time` substring.
+DATE_NAME_TOKENS = frozenset({"date", "time", "timestamp", "datetime"})
 
-# Description keywords that suggest a date/timestamp when the column
-# name is uninformative (e.g. jaffle_shop's `first_order`).
-DATE_DESC_HINTS = ("date", "timestamp", "datetime")
+# Column-name suffixes that mark it date-like — the convention
+# `<verb>ed_at` / `<noun>_on` is strong enough on its own. Suffix
+# (not substring) so `meta_attribute` doesn't false-positive.
+DATE_NAME_SUFFIXES = ("_at", "_on")
+
+# Case-sensitive description match (word-boundary). Capitalized forms
+# appear when the description STARTS with the temporal word ("Date of
+# the customer's first order"). Lowercase mid-sentence mentions
+# ("...to date.", "out of date") are typically idiomatic and excluded.
+DATE_DESC_RE = re.compile(r"\b(Date|Timestamp|Datetime)\b")
 
 # Layers a parent of a new MART may live in. SOURCE and EXPOSURE are
 # excluded by the layer transition matrix.
@@ -223,10 +233,11 @@ def enumerate_grain_resolutions(
 
 def is_date_like(column_name: str, description: str) -> bool:
     name = column_name.lower()
-    desc = description.lower()
-    if any(h in name for h in DATE_NAME_HINTS):
+    if any(t in DATE_NAME_TOKENS for t in name.split("_")):
         return True
-    if any(h in desc for h in DATE_DESC_HINTS):
+    if any(name.endswith(s) for s in DATE_NAME_SUFFIXES):
+        return True
+    if DATE_DESC_RE.search(description):
         return True
     return False
 

@@ -1,0 +1,26 @@
+kind: metric_request
+id: new_customers_monthly
+intent: >
+  Growth team wants to track the number of new customers acquired
+  each month — customers whose first order falls in that month — on
+  the growth dashboard. Currently no time-aggregated view of customer
+  acquisition exists; the customers mart is per-customer only.
+
+metric:
+  name: new_customers_monthly
+  output_shape:
+    grain:
+      keys: [month]
+      coverage:
+        month:
+          dense: true
+          range: {from: earliest_event, to: current_period}
+          fill: 0
+    columns:
+      - name: new_customers
+        column: customer_id
+        aggregation: count_distinct
+
+consumer:
+  tool: metabase
+  artifact: growth_dashboard
