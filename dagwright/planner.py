@@ -2,7 +2,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dagwright.loaders import load_consumer_graph, load_manifest, load_spec
+from dagwright.loaders import (
+    load_consumer_graph,
+    load_exposures_as_consumer_graph,
+    load_manifest,
+    load_spec,
+)
 from dagwright.state import (
     ConsumerGraph,
     Contract,
@@ -83,11 +88,12 @@ class Rejection:
 
 def plan_command(args) -> int:
     dag = load_manifest(args.manifest)
-    cg = (
-        load_consumer_graph(args.bi)
-        if args.bi
-        else ConsumerGraph(tool="", artifacts={})
-    )
+    if args.bi:
+        cg = load_consumer_graph(args.bi)
+    else:
+        # Fall back to dbt exposures embedded in the manifest. Empty
+        # graph if no exposures declared.
+        cg = load_exposures_as_consumer_graph(args.manifest)
     spec = load_spec(args.spec)
 
     if isinstance(spec, MetricRequest):
@@ -771,22 +777,30 @@ def plan_definitional_change(
 
 
 def derive_contracts(cg: ConsumerGraph, in_scope_nodes: list[str]) -> list[Contract]:
-    """Materialize a Contract per (artifact, node, column) read on
-    in-scope nodes. Synthetic ids are deterministic."""
+    """Materialize Contracts for in-scope nodes. When the consumer
+    declares column-level reads, emit one Contract per column. When
+    the consumer declares only model-level reads (e.g. dbt exposures
+    with empty columns tuple), emit a single Contract with column='*'
+    indicating "any column on this node." The contract evaluator
+    handles '*' as a model-level coarsening."""
     out: list[Contract] = []
     in_scope = set(in_scope_nodes)
     for artifact in cg.artifacts.values():
         for c in artifact.consumes:
             if c.node not in in_scope:
                 continue
-            for col in c.columns:
-                cid = f"C_{artifact.id}__{c.node}__{col}"
+            if c.columns:
+                for col in c.columns:
+                    cid = f"C_{artifact.id}__{c.node}__{col}"
+                    out.append(Contract(
+                        id=cid, consumer_artifact=artifact.id,
+                        node=c.node, column=col, tier="hard",
+                    ))
+            else:
+                cid = f"C_{artifact.id}__{c.node}__*"
                 out.append(Contract(
-                    id=cid,
-                    consumer_artifact=artifact.id,
-                    node=c.node,
-                    column=col,
-                    tier="hard",
+                    id=cid, consumer_artifact=artifact.id,
+                    node=c.node, column="*", tier="hard",
                 ))
     return out
 
@@ -808,7 +822,11 @@ def _evaluate_contracts(
 
     out: list[ContractStatus] = []
     for k in contracts:
-        if k.node != spec.target_node or k.column != spec.target_column:
+        # In scope iff the contract is on the target node AND either
+        # the column matches or the contract is model-level ('*').
+        in_target_node = k.node == spec.target_node
+        column_in_scope = k.column == spec.target_column or k.column == "*"
+        if not (in_target_node and column_in_scope):
             out.append(ContractStatus(
                 contract_id=k.id,
                 consumer_artifact=k.consumer_artifact,
@@ -819,7 +837,33 @@ def _evaluate_contracts(
             ))
             continue
 
-        if k.consumer_artifact in must_migrate:
+        # Model-level contract: consumer reads this node but column-
+        # level deps unspecified. We can't tell whether their read
+        # includes the changing column, so we never mark these
+        # held=False (would create false alarms); instead surface a
+        # verbose warning the AE can act on.
+        if k.column == "*":
+            if redefines_in_place:
+                note = (
+                    "MODEL-LEVEL dependency; verify whether the consumer's "
+                    f"reads of {k.node} include {spec.target_column!r} — "
+                    "if so, their values change with the new definition"
+                )
+            elif k.consumer_artifact in must_migrate:
+                note = (
+                    "MODEL-LEVEL dependency; consumer is in must_migrate but "
+                    "their column-level reads are unknown — verify whether "
+                    f"{spec.target_column!r} is among them and the plan "
+                    "covers it"
+                )
+            else:
+                note = (
+                    "MODEL-LEVEL dependency; consumer reads "
+                    f"{k.node} but not flagged for migration; old definition "
+                    "preserved at the original column name"
+                )
+            held = True
+        elif k.consumer_artifact in must_migrate:
             if (k.consumer_artifact, k.column) in repointed:
                 note = "must_migrate consumer repointed by an update_consumer op"
                 held = True

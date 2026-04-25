@@ -137,6 +137,37 @@ def load_consumer_graph(path: Path) -> ConsumerGraph:
     return ConsumerGraph(tool=tool, artifacts=artifacts)
 
 
+def load_exposures_as_consumer_graph(manifest_path: Path) -> ConsumerGraph:
+    """Read dbt exposures from a manifest.json and convert to a
+    ConsumerGraph. Each exposure becomes an Artifact; each model in
+    its `depends_on.nodes` becomes a Consumes with empty columns
+    (model-level coarsening — exposures rarely declare column-level
+    deps). Used as the BI consumer graph when no separate BI export
+    is supplied; aligns with how mature dbt projects already declare
+    consumers in-tree."""
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    raw_exposures = manifest.get("exposures", {}) or {}
+    artifacts: dict[str, Artifact] = {}
+    for raw in raw_exposures.values():
+        node_keys = (raw.get("depends_on") or {}).get("nodes", []) or []
+        consumes_list: list[Consumes] = []
+        for dep_key in node_keys:
+            n = _key_to_name(dep_key)
+            if n:
+                consumes_list.append(Consumes(node=n, columns=()))
+        if not consumes_list:
+            continue
+        name = raw.get("name") or raw.get("unique_id")
+        a = Artifact(
+            id=name,
+            kind=raw.get("type", "exposure"),
+            consumes=tuple(consumes_list),
+        )
+        artifacts[a.id] = a
+    return ConsumerGraph(tool="dbt_exposures", artifacts=artifacts)
+
+
 def load_spec(path: Path):
     """Dispatch on top-level `kind`. Returns the spec dataclass for
     that kind. Callers branch on isinstance to dispatch to the

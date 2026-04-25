@@ -1,0 +1,30 @@
+kind: definitional_change
+id: dau_desktop_only
+intent: >
+  Product leadership has decided that the company's headline DAU
+  metric should reflect desktop usage only — mobile is a different
+  segment with separate ownership and the combined number was
+  hiding desktop trends. The customer-journey and product-pulse
+  dashboards both consume fct_active_users today and should reflect
+  the new desktop-only definition. Other consumers of the same
+  model (data science notebooks, internal Hub views) are out of
+  scope for this migration; they may continue to read the all-
+  platforms definition.
+
+target:
+  node: fct_active_users
+  column: daily_active_users
+
+old_definition:
+  basis: all_platforms_server_reported
+  expr: daily_active_users
+
+new_definition:
+  basis: desktop_only
+  expr: daily_desktop_active_users
+
+migration:
+  must_migrate:
+    - customer_journey_and_new_logo_exposure
+    - product_pulse
+  allow_stale_consumers: false
