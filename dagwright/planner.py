@@ -5,8 +5,10 @@ from dagwright.loaders import load_consumer_graph, load_manifest, load_spec
 from dagwright.state import (
     ConsumerGraph,
     DagState,
+    MeasureColumn,
     MetricRequest,
     Node,
+    OutputShape,
 )
 
 # Time grains the planner knows how to derive from a date-like column.
@@ -100,38 +102,38 @@ def plan_metric_request(
     plans: list[Plan] = []
     rejections: list[Rejection] = []
 
+    required_source_columns = _required_source_columns(spec.output_shape)
+
     for parent_name in sorted(dag.nodes):
         node = dag.nodes[parent_name]
         if node.layer not in ELIGIBLE_PARENT_LAYERS:
             continue
 
-        # Measure column must be present in the parent's declared
-        # schema (strict mode — see CHARTER + REGENERATE notes).
-        if spec.measure.column and spec.measure.column not in node.schema:
+        # All structured measure columns must have their source column
+        # present in the parent's declared schema (strict mode; see
+        # PLANNER_NOTES.md boundary #4). expr-form columns are skipped
+        # — the planner does not parse SQL.
+        missing = [c for c in required_source_columns if c not in node.schema]
+        if missing:
             rejections.append(
                 Rejection(
                     candidate_parent=parent_name,
                     candidate_source_columns=[],
                     reason=(
-                        f"declared schema lacks measure column "
-                        f"{spec.measure.column!r}"
+                        f"declared schema lacks measure column(s) {missing}"
                     ),
                 )
             )
             continue
 
-        # For an `expr` measure the planner cannot inspect column
-        # lineage without parsing SQL; v0 trusts the AE that the expr
-        # is satisfiable by the parent's columns.
-
-        resolution_combos = enumerate_grain_resolutions(node, spec.grain)
+        resolution_combos = enumerate_grain_resolutions(node, spec.output_shape.grain.keys)
         if not resolution_combos:
             rejections.append(
                 Rejection(
                     candidate_parent=parent_name,
                     candidate_source_columns=[],
                     reason=(
-                        f"grain {list(spec.grain)} not resolvable from "
+                        f"grain {list(spec.output_shape.grain.keys)} not resolvable from "
                         "declared schema (no direct match, no derivable "
                         "date column for time grain)"
                     ),
@@ -144,6 +146,17 @@ def plan_metric_request(
             plans.append(plan)
 
     return plans, rejections
+
+
+def _required_source_columns(output_shape: OutputShape) -> list[str]:
+    """Source columns the parent must expose for every structured
+    measure column. expr columns are opaque (escape hatch) and don't
+    contribute requirements."""
+    needed: list[str] = []
+    for c in output_shape.columns:
+        if c.is_structured and c.column:
+            needed.append(c.column)
+    return needed
 
 
 def enumerate_grain_resolutions(
@@ -208,25 +221,21 @@ def build_plan(
 ) -> Plan:
     parent = dag.nodes[parent_name]
     new_node_name = spec.name
-    result_column = spec.name
-    new_schema = tuple(list(spec.grain) + [result_column])
+    grain_keys = list(spec.output_shape.grain.keys)
+    column_names = [c.name for c in spec.output_shape.columns]
+    new_schema = grain_keys + column_names
 
-    # Structured-form measures get qualified with the parent name so
-    # the column_lineage is unambiguous when rendered. Expr-form
-    # measures are passed through verbatim — the AE wrote arbitrary
-    # SQL and the planner does not parse it.
-    measure_expr = (
-        spec.measure.expr
-        if spec.measure.expr
-        else f"{spec.measure.aggregation}({parent_name}.{spec.measure.column})"
-    )
-
-    column_lineage = {
-        gr.grain_key: f"{parent_name}.{gr.expr}" if gr.via == "direct"
-        else f"{gr.expr.replace(gr.source_column, parent_name + '.' + gr.source_column)}"
-        for gr in grain_resolution
-    }
-    column_lineage[result_column] = measure_expr
+    column_lineage: dict[str, str] = {}
+    for gr in grain_resolution:
+        if gr.via == "direct":
+            column_lineage[gr.grain_key] = f"{parent_name}.{gr.expr}"
+        else:
+            # Replace the bare source column with parent-qualified form.
+            column_lineage[gr.grain_key] = gr.expr.replace(
+                gr.source_column, f"{parent_name}.{gr.source_column}"
+            )
+    for c in spec.output_shape.columns:
+        column_lineage[c.name] = _column_expr(c, parent_name)
 
     operations: list[Operation] = [
         Operation(
@@ -234,8 +243,8 @@ def build_plan(
             args={
                 "name": new_node_name,
                 "layer": "MART",
-                "grain": list(spec.grain),
-                "schema": list(new_schema),
+                "grain": grain_keys,
+                "schema": new_schema,
                 "materialization": "table",
             },
         ),
@@ -256,7 +265,7 @@ def build_plan(
                 "node": new_node_name,
                 "consumer": spec.consumer.artifact,
                 "contract_id": "C1",
-                "terms": {"columns": list(new_schema)},
+                "terms": {"columns": new_schema},
                 "tier": spec.contract_tier,
             },
         ),
@@ -266,7 +275,7 @@ def build_plan(
                 "node": new_node_name,
                 "consumer": spec.consumer.artifact,
                 "contract_id": "C2",
-                "terms": {"grain_entity": "_".join(spec.grain)},
+                "terms": {"grain_entity": "_".join(grain_keys)},
                 "tier": spec.contract_tier,
             },
         ),
@@ -294,6 +303,19 @@ def build_plan(
             + ", ".join(f"{gr.grain_key} (from {parent_name}.{gr.source_column})" for gr in derived)
             + " — verify the source column is the intended one for this metric."
         )
+    # If any grain key was declared dense in the spec, the planner does
+    # not yet emit a date-spine companion. PLANNER_NOTES.md "Planned
+    # widenings" tracks this; surfacing it as a note keeps the human
+    # reviewer honest until phase B lands.
+    dense_keys = [k for k, cov in spec.output_shape.grain.coverage.items() if cov.dense]
+    if dense_keys:
+        notes.append(
+            f"Spec requests dense coverage on {dense_keys}, but this plan "
+            f"uses raw GROUP BY without a date-spine companion node — months "
+            f"with no underlying events will be absent from the result. "
+            f"See PLANNER_NOTES.md (planned widening: multi-parent "
+            f"enumeration + scaffolding-node generation)."
+        )
     if blast["new_artifact"] not in [a.id for a in cg.artifacts.values()]:
         notes.append(
             f"Consumer {spec.consumer.artifact!r} is not yet in the "
@@ -316,6 +338,16 @@ def build_plan(
     )
 
 
+def _column_expr(column: MeasureColumn, parent_name: str) -> str:
+    """Render the SQL expression that produces this measure column.
+    Structured columns get qualified with the parent name; expr
+    columns are passed through verbatim (the AE wrote arbitrary SQL
+    and the planner does not parse it)."""
+    if column.expr:
+        return column.expr
+    return f"{column.aggregation}({parent_name}.{column.column})"
+
+
 def check_invariants(
     parent: Node, grain_resolution: list[GrainResolution]
 ) -> list[InvariantCheck]:
@@ -323,7 +355,7 @@ def check_invariants(
     downstream of an existing eligible parent. Other invariants from
     catalog/invariants.yaml are not engaged by this plan shape and
     are reported as "not engaged" in render."""
-    checks = [
+    return [
         InvariantCheck(
             id="I1",
             holds=True,
@@ -365,7 +397,6 @@ def check_invariants(
             note=f"Transform 'aggregation' valid for {parent.layer} -> MART.",
         ),
     ]
-    return checks
 
 
 def compute_blast_radius(
@@ -419,10 +450,11 @@ def describe_semantics(
     compute. Distinct plans differ in which source column drives the
     grain, which often changes the metric's meaning entirely."""
     derived = [gr for gr in grain_resolution if gr.via == "derived"]
+    grain_keys = list(spec.output_shape.grain.keys)
     if not derived:
         return (
             f"{spec.name} computed directly from {parent.name} grouped by "
-            f"{', '.join(spec.grain)}."
+            f"{', '.join(grain_keys)}."
         )
     parts = [
         f"{gr.grain_key} = date_trunc('{gr.grain_key}', {parent.name}.{gr.source_column})"

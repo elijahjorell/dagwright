@@ -3,6 +3,10 @@ from typing import Optional
 
 LAYERS = ("SOURCE", "STAGING", "INTERMEDIATE", "MART", "EXPOSURE")
 
+# Grain keys whose coverage must be declared in the spec. Aligns with
+# the time grains the planner can derive via date_trunc.
+TIME_LIKE_KEYS = ("day", "week", "month", "quarter", "year")
+
 
 @dataclass
 class Node:
@@ -82,7 +86,28 @@ class ConsumerGraph:
 
 
 @dataclass(frozen=True)
-class Measure:
+class CoverageRange:
+    from_: str  # ISO date "YYYY-MM-DD" or symbolic ("earliest_event", "current_period")
+    to: str
+
+
+@dataclass(frozen=True)
+class Coverage:
+    dense: bool
+    range: Optional[CoverageRange]  # required when dense; None otherwise
+    fill: object = None
+
+
+@dataclass(frozen=True)
+class Grain:
+    keys: tuple[str, ...]
+    coverage: dict[str, Coverage]  # subset of keys; required entries for time-like keys
+
+
+@dataclass(frozen=True)
+class MeasureColumn:
+    name: str
+    # Exactly one of (column + aggregation) or expr is populated.
     column: Optional[str]
     aggregation: Optional[str]
     expr: Optional[str]
@@ -90,6 +115,12 @@ class Measure:
     @property
     def is_structured(self) -> bool:
         return self.expr is None
+
+
+@dataclass(frozen=True)
+class OutputShape:
+    grain: Grain
+    columns: tuple[MeasureColumn, ...]
 
 
 @dataclass(frozen=True)
@@ -103,8 +134,7 @@ class MetricRequest:
     id: str
     intent: str
     name: str
-    grain: tuple[str, ...]
-    measure: Measure
+    output_shape: OutputShape
     filters: tuple[str, ...]
     consumer: Consumer
     contract_tier: str

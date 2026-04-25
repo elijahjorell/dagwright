@@ -20,18 +20,7 @@ def render_markdown(spec: MetricRequest, plans: list[Plan], rejections: list[Rej
     lines.append("")
     lines.append(f"**Intent.** {spec.intent.strip()}")
     lines.append("")
-    lines.append(
-        f"**Request.** kind=`metric_request`, name=`{spec.name}`, "
-        f"grain=`{list(spec.grain)}`, "
-        f"measure="
-        + (
-            f"`{spec.measure.aggregation}({spec.measure.column})`"
-            if spec.measure.is_structured
-            else f"`{spec.measure.expr}`"
-        )
-        + f", consumer=`{spec.consumer.tool}/{spec.consumer.artifact}`, "
-        f"tier=`{spec.contract_tier}`"
-    )
+    lines.extend(_render_request_md(spec))
     lines.append("")
 
     if not plans:
@@ -110,6 +99,39 @@ def _render_plan_md(rank: int, plan: Plan) -> list[str]:
             out.append(f"- {n}")
         out.append("")
 
+    return out
+
+
+def _render_request_md(spec: MetricRequest) -> list[str]:
+    grain = spec.output_shape.grain
+    out: list[str] = []
+    out.append("**Request.**")
+    out.append("")
+    out.append(
+        f"- kind: `metric_request`  name: `{spec.name}`  "
+        f"tier: `{spec.contract_tier}`  consumer: `{spec.consumer.tool}/{spec.consumer.artifact}`"
+    )
+    out.append(f"- grain.keys: `{list(grain.keys)}`")
+    if grain.coverage:
+        out.append("- grain.coverage:")
+        for key, cov in grain.coverage.items():
+            density = "dense" if cov.dense else "sparse"
+            range_part = ""
+            if cov.range:
+                range_part = f", range `{cov.range.from_}` → `{cov.range.to}`"
+            fill_part = f", fill `{cov.fill}`" if cov.fill is not None else ""
+            out.append(f"  - `{key}`: {density}{range_part}{fill_part}")
+    out.append("- columns:")
+    for c in spec.output_shape.columns:
+        if c.is_structured:
+            expr = f"{c.aggregation}({c.column})"
+        else:
+            expr = c.expr
+        out.append(f"  - `{c.name}` = `{expr}`")
+    if spec.filters:
+        out.append("- filters:")
+        for f in spec.filters:
+            out.append(f"  - `{f}`")
     return out
 
 
