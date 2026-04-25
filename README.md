@@ -3,8 +3,8 @@
 Architectural change planner for analytics engineers.
 
 Given a unified DAG state (dbt + BI-tool consumers) and a spec
-describing a desired metric, dagwright returns ranked change plans
-that preserve declared contracts and structural invariants.
+describing a desired DAG change, dagwright returns ranked change
+plans that preserve declared contracts and structural invariants.
 
 Does not execute plans. Does not touch data. Emits plans; AE + AI
 execute them.

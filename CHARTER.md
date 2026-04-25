@@ -8,8 +8,8 @@ the change.
 ## Aim (one sentence)
 
 Given a unified DAG state (dbt + BI-tool consumers) and a
-dagwright-spec describing a desired metric, produce a ranked set of
-architectural change plans that preserve declared contracts and
+dagwright-spec describing a desired DAG change, produce a ranked set
+of architectural change plans that preserve declared contracts and
 structural invariants, and return them to the caller (AE + AI) to
 execute.
 
@@ -41,7 +41,9 @@ execute.
 - Ingest `dbt manifest.json`.
 - Ingest one BI tool's consumer graph. Start with Metabase (open source,
   accessible API). One, not N.
-- Accept a dagwright-spec (YAML) describing the target metric with
+- Accept a dagwright-spec (YAML) describing the change request. v0
+  implements the `metric_request` type only; see
+  `specs/REQUEST_TYPES.md` for the broader input taxonomy. Spec uses
   progressive fields (minimal required, more if ambiguity demands it).
 - Expect an LLM to be in the loop on the caller side to fill spec
   fields from AE context (notes, ticket, stakeholder request).
