@@ -4,6 +4,11 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to cp1252; force utf-8 so Unicode in
+    # plan output renders cleanly when piped to a terminal.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(
         prog="dagwright",
         description="Architectural change planner for analytics engineers.",
