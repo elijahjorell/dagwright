@@ -1,0 +1,26 @@
+kind: definitional_change
+id: lifetime_spend_pretax
+intent: >
+  Finance has standardized on pre-tax lifetime spend for revenue
+  reporting. executive_overview currently reads
+  customers.lifetime_spend, which is post-tax (equals
+  lifetime_spend_pretax + lifetime_tax_paid). Move the dashboard's
+  "lifetime spend" reading to the pre-tax basis without breaking the
+  executive_overview contract.
+
+target:
+  node: customers
+  column: lifetime_spend
+
+old_definition:
+  basis: post_tax
+  expr: lifetime_spend_pretax + lifetime_tax_paid
+
+new_definition:
+  basis: pre_tax
+  expr: lifetime_spend_pretax
+
+migration:
+  must_migrate:
+    - executive_overview
+  allow_stale_consumers: false

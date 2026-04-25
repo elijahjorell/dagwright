@@ -5,7 +5,9 @@ from pathlib import Path
 from dagwright.loaders import load_consumer_graph, load_manifest, load_spec
 from dagwright.state import (
     ConsumerGraph,
+    Contract,
     DagState,
+    DefinitionalChange,
     MeasureColumn,
     MetricRequest,
     Node,
@@ -88,22 +90,37 @@ def plan_command(args) -> int:
     )
     spec = load_spec(args.spec)
 
-    plans, rejections = plan_metric_request(dag, cg, spec)
-    plans.sort(key=lambda p: -p.score)
-    plans = plans[: args.top]
+    if isinstance(spec, MetricRequest):
+        plans, rejections = plan_metric_request(dag, cg, spec)
+        plans.sort(key=lambda p: -p.score)
+        plans = plans[: args.top]
+        if args.format in ("json", "both"):
+            from dagwright.output import render_json
+            print(render_json(spec, plans, rejections))
+        if args.format == "both":
+            print()
+        if args.format in ("markdown", "both"):
+            from dagwright.output import render_markdown
+            print(render_markdown(spec, plans, rejections))
+        return 0 if plans else 2
 
-    if args.format in ("json", "both"):
-        from dagwright.output import render_json
+    if isinstance(spec, DefinitionalChange):
+        dc_plans, rejections = plan_definitional_change(dag, cg, spec)
+        dc_plans.sort(key=lambda p: -p.score)
+        dc_plans = dc_plans[: args.top]
+        if args.format in ("json", "both"):
+            from dagwright.output import render_json_definitional_change
+            print(render_json_definitional_change(spec, dc_plans, rejections))
+        if args.format == "both":
+            print()
+        if args.format in ("markdown", "both"):
+            from dagwright.output import render_markdown_definitional_change
+            print(render_markdown_definitional_change(spec, dc_plans, rejections))
+        return 0 if dc_plans else 2
 
-        print(render_json(spec, plans, rejections))
-    if args.format == "both":
-        print()
-    if args.format in ("markdown", "both"):
-        from dagwright.output import render_markdown
-
-        print(render_markdown(spec, plans, rejections))
-
-    return 0 if plans else 2
+    raise NotImplementedError(
+        f"plan_command does not handle spec kind: {type(spec).__name__}"
+    )
 
 
 def plan_metric_request(
@@ -675,3 +692,472 @@ def describe_semantics(
         + "; ".join(parts)
         + ". The choice of source column determines what the metric counts."
     )
+
+
+# -----------------------------------------------------------------------------
+# definitional_change planning
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class ContractStatus:
+    contract_id: str
+    consumer_artifact: str
+    node: str
+    column: str
+    held: bool
+    note: str
+
+
+@dataclass
+class DefinitionalChangePlan:
+    shape: str  # replace_in_place | add_versioned_column | versioned_mart | consumer_only
+    operations: list[Operation]
+    contract_status: list[ContractStatus]
+    blast_radius: dict
+    effort: int
+    score: float
+    semantic_summary: str
+    notes: list[str] = field(default_factory=list)
+
+
+def plan_definitional_change(
+    dag: DagState, cg: ConsumerGraph, spec: DefinitionalChange
+) -> tuple[list[DefinitionalChangePlan], list[Rejection]]:
+    """Enumerate plans satisfying a definitional change. Plan shapes:
+
+    - replace_in_place: redefine the column on the target node.
+    - add_versioned_column: add a new column with the new definition;
+      old column preserved; must_migrate consumers repointed.
+    - versioned_mart: build a parallel `<target>_v2` carrying the new
+      definition; original retained.
+    - consumer_only: when an existing column on the target node
+      already carries the new definition, only consumer reads change.
+    """
+    plans: list[DefinitionalChangePlan] = []
+    rejections: list[Rejection] = []
+
+    target_node = dag.nodes.get(spec.target_node)
+    if target_node is None:
+        rejections.append(Rejection(
+            candidate_parent=spec.target_node,
+            candidate_source_columns=[],
+            reason=f"target node {spec.target_node!r} not found in manifest",
+        ))
+        return plans, rejections
+
+    if spec.target_column not in target_node.schema:
+        rejections.append(Rejection(
+            candidate_parent=spec.target_node,
+            candidate_source_columns=[],
+            reason=(
+                f"target column {spec.target_column!r} not in declared "
+                f"schema of {spec.target_node!r}"
+            ),
+        ))
+        return plans, rejections
+
+    contracts = derive_contracts(cg, [spec.target_node])
+
+    plans.append(_plan_replace_in_place(spec, dag, cg, target_node, contracts))
+    plans.append(_plan_add_versioned_column(spec, dag, cg, target_node, contracts))
+    plans.append(_plan_versioned_mart(spec, dag, cg, target_node, contracts))
+
+    consumer_only = _plan_consumer_only(spec, dag, cg, target_node, contracts)
+    if consumer_only is not None:
+        plans.append(consumer_only)
+
+    return plans, rejections
+
+
+def derive_contracts(cg: ConsumerGraph, in_scope_nodes: list[str]) -> list[Contract]:
+    """Materialize a Contract per (artifact, node, column) read on
+    in-scope nodes. Synthetic ids are deterministic."""
+    out: list[Contract] = []
+    in_scope = set(in_scope_nodes)
+    for artifact in cg.artifacts.values():
+        for c in artifact.consumes:
+            if c.node not in in_scope:
+                continue
+            for col in c.columns:
+                cid = f"C_{artifact.id}__{c.node}__{col}"
+                out.append(Contract(
+                    id=cid,
+                    consumer_artifact=artifact.id,
+                    node=c.node,
+                    column=col,
+                    tier="hard",
+                ))
+    return out
+
+
+def _evaluate_contracts(
+    spec: DefinitionalChange,
+    contracts: list[Contract],
+    repoints: list[tuple[str, str, str]],
+    redefines_in_place: bool,
+) -> list[ContractStatus]:
+    """One ContractStatus per derived contract. Implements decision (c):
+    must_migrate consumers' contracts hold iff their read of the
+    target column is either repointed by an `update_consumer` op or
+    flows through an in-place upstream redefinition. Non-must_migrate
+    consumers' column-level reads always hold; in-place redefinition
+    surfaces a SEMANTIC RISK note for them."""
+    must_migrate = set(spec.must_migrate)
+    repointed = {(a, fc) for (a, fc, _) in repoints}
+
+    out: list[ContractStatus] = []
+    for k in contracts:
+        if k.node != spec.target_node or k.column != spec.target_column:
+            out.append(ContractStatus(
+                contract_id=k.id,
+                consumer_artifact=k.consumer_artifact,
+                node=k.node,
+                column=k.column,
+                held=True,
+                note="outside change scope",
+            ))
+            continue
+
+        if k.consumer_artifact in must_migrate:
+            if (k.consumer_artifact, k.column) in repointed:
+                note = "must_migrate consumer repointed by an update_consumer op"
+                held = True
+            elif redefines_in_place:
+                note = (
+                    "must_migrate consumer reads the redefined column; "
+                    "new definition flows through"
+                )
+                held = True
+            else:
+                note = (
+                    "must_migrate consumer's read still points to the old "
+                    "definition; plan does not satisfy the change for this consumer"
+                )
+                held = False
+        else:
+            if redefines_in_place:
+                note = (
+                    "column-level read holds; SEMANTIC RISK — meaning of "
+                    "column changes silently for this consumer (not in must_migrate)"
+                )
+            else:
+                note = (
+                    "column-level read holds; old definition preserved at the "
+                    "original column name"
+                )
+            held = True
+
+        out.append(ContractStatus(
+            contract_id=k.id,
+            consumer_artifact=k.consumer_artifact,
+            node=k.node,
+            column=k.column,
+            held=held,
+            note=note,
+        ))
+    return out
+
+
+def _plan_replace_in_place(
+    spec: DefinitionalChange,
+    dag: DagState,
+    cg: ConsumerGraph,
+    target_node: Node,
+    contracts: list[Contract],
+) -> DefinitionalChangePlan:
+    operations = [
+        Operation(
+            op="modify_node",
+            args={
+                "name": spec.target_node,
+                "properties": {
+                    "column_definitions": {
+                        spec.target_column: spec.new_definition.expr,
+                    },
+                },
+            },
+        ),
+    ]
+    contract_status = _evaluate_contracts(spec, contracts, repoints=[], redefines_in_place=True)
+
+    silent_consumers = sorted({
+        cs.consumer_artifact for cs in contract_status
+        if cs.node == spec.target_node
+        and cs.column == spec.target_column
+        and "SEMANTIC RISK" in cs.note
+    })
+    blast = {
+        "scheme": "redefine column in place; meaning changes for all readers",
+        "must_migrate_satisfied": list(spec.must_migrate),
+        "existing_artifacts_affected": silent_consumers,
+    }
+    notes: list[str] = []
+    if silent_consumers:
+        notes.append(
+            f"Consumer(s) {silent_consumers} read this column but are not in "
+            "must_migrate. Their numbers change silently. Confirm intent before "
+            "executing."
+        )
+    return DefinitionalChangePlan(
+        shape="replace_in_place",
+        operations=operations,
+        contract_status=contract_status,
+        blast_radius=blast,
+        effort=len(operations),
+        score=_score_change_plan("replace_in_place", operations, contract_status),
+        semantic_summary=(
+            f"Redefine `{spec.target_node}.{spec.target_column}` from "
+            f"`{spec.old_definition.expr}` ({spec.old_definition.basis}) to "
+            f"`{spec.new_definition.expr}` ({spec.new_definition.basis}). "
+            "All consumers see the new value at the same column name."
+        ),
+        notes=notes,
+    )
+
+
+def _plan_add_versioned_column(
+    spec: DefinitionalChange,
+    dag: DagState,
+    cg: ConsumerGraph,
+    target_node: Node,
+    contracts: list[Contract],
+) -> DefinitionalChangePlan:
+    new_col = f"{spec.target_column}_v2"
+    operations: list[Operation] = [
+        Operation(
+            op="modify_node",
+            args={
+                "name": spec.target_node,
+                "properties": {
+                    "schema_add": [new_col],
+                    "column_definitions": {new_col: spec.new_definition.expr},
+                },
+            },
+        ),
+    ]
+    repoints: list[tuple[str, str, str]] = []
+    for artifact_id in spec.must_migrate:
+        operations.append(Operation(
+            op="update_consumer",
+            args={
+                "artifact": artifact_id,
+                "from_read": {"node": spec.target_node, "column": spec.target_column},
+                "to_read": {"node": spec.target_node, "column": new_col},
+            },
+        ))
+        repoints.append((artifact_id, spec.target_column, new_col))
+
+    contract_status = _evaluate_contracts(
+        spec, contracts, repoints=repoints, redefines_in_place=False
+    )
+    blast = {
+        "scheme": (
+            f"add new column `{new_col}` carrying the new definition; "
+            "old column preserved"
+        ),
+        "must_migrate_satisfied": list(spec.must_migrate),
+        "existing_artifacts_affected": [],
+    }
+    notes = [
+        f"Old column `{spec.target_column}` retains its current definition. "
+        "Consumers not in must_migrate continue to read the old value."
+    ]
+    if new_col in target_node.schema:
+        notes.append(
+            f"WARNING: `{new_col}` already exists on `{spec.target_node}`. "
+            "Pick a different name when executing."
+        )
+    return DefinitionalChangePlan(
+        shape="add_versioned_column",
+        operations=operations,
+        contract_status=contract_status,
+        blast_radius=blast,
+        effort=len(operations),
+        score=_score_change_plan("add_versioned_column", operations, contract_status),
+        semantic_summary=(
+            f"Add new column `{spec.target_node}.{new_col}` carrying the "
+            f"{spec.new_definition.basis} definition (`{spec.new_definition.expr}`). "
+            f"Repoint must_migrate consumer(s) to the new column. Old column "
+            f"`{spec.target_column}` is unchanged."
+        ),
+        notes=notes,
+    )
+
+
+def _plan_versioned_mart(
+    spec: DefinitionalChange,
+    dag: DagState,
+    cg: ConsumerGraph,
+    target_node: Node,
+    contracts: list[Contract],
+) -> DefinitionalChangePlan:
+    new_node = f"{spec.target_node}_v2"
+    parents = list(dag.parents_of(spec.target_node))
+    operations: list[Operation] = [
+        Operation(
+            op="add_node",
+            args={
+                "name": new_node,
+                "layer": target_node.layer,
+                "grain": list(target_node.grain),
+                "schema": list(target_node.schema),
+                "materialization": target_node.materialization,
+                "column_definitions": {
+                    spec.target_column: spec.new_definition.expr,
+                },
+            },
+        ),
+    ]
+    for parent in parents:
+        operations.append(Operation(
+            op="add_edge",
+            args={
+                "parent": parent,
+                "child": new_node,
+                "transform_type": "passthrough",
+                "cardinality": "one_to_one",
+                "filters": [],
+            },
+        ))
+
+    repoints: list[tuple[str, str, str]] = []
+    for artifact_id in spec.must_migrate:
+        operations.append(Operation(
+            op="update_consumer",
+            args={
+                "artifact": artifact_id,
+                "from_read": {"node": spec.target_node, "column": spec.target_column},
+                "to_read": {"node": new_node, "column": spec.target_column},
+            },
+        ))
+        # Repoint key uses (artifact, from_column); the contract evaluator
+        # only inspects column identity. Versioned-mart still satisfies
+        # must_migrate because the consumer's reading is moved to a node
+        # carrying the new definition.
+        repoints.append((artifact_id, spec.target_column, spec.target_column))
+
+    contract_status = _evaluate_contracts(
+        spec, contracts, repoints=repoints, redefines_in_place=False
+    )
+    blast = {
+        "scheme": (
+            f"build parallel mart `{new_node}` with the new definition; "
+            f"original `{spec.target_node}` retained for stale consumers"
+        ),
+        "must_migrate_satisfied": list(spec.must_migrate),
+        "existing_artifacts_affected": [],
+    }
+    notes = [
+        "Versioned-mart pattern. Heaviest plan; choose this when many "
+        "consumers depend on the original node and migration must be staged. "
+        f"Sets up an explicit deprecation path for `{spec.target_node}`."
+    ]
+    return DefinitionalChangePlan(
+        shape="versioned_mart",
+        operations=operations,
+        contract_status=contract_status,
+        blast_radius=blast,
+        effort=len(operations),
+        score=_score_change_plan("versioned_mart", operations, contract_status),
+        semantic_summary=(
+            f"Build `{new_node}` as a parallel of `{spec.target_node}` with "
+            f"`{spec.target_column}` redefined to `{spec.new_definition.expr}` "
+            f"({spec.new_definition.basis}). Repoint must_migrate consumers; "
+            f"original `{spec.target_node}` retained for any consumer staying "
+            "on the old definition."
+        ),
+        notes=notes,
+    )
+
+
+def _plan_consumer_only(
+    spec: DefinitionalChange,
+    dag: DagState,
+    cg: ConsumerGraph,
+    target_node: Node,
+    contracts: list[Contract],
+) -> DefinitionalChangePlan | None:
+    """Feasible when the new definition is a bare column reference to
+    a column already on the target node."""
+    expr = spec.new_definition.expr.strip()
+    if expr not in target_node.schema:
+        return None
+    if expr == spec.target_column:
+        return None  # trivial; new definition equals existing column
+
+    operations: list[Operation] = []
+    repoints: list[tuple[str, str, str]] = []
+    for artifact_id in spec.must_migrate:
+        operations.append(Operation(
+            op="update_consumer",
+            args={
+                "artifact": artifact_id,
+                "from_read": {"node": spec.target_node, "column": spec.target_column},
+                "to_read": {"node": spec.target_node, "column": expr},
+            },
+        ))
+        repoints.append((artifact_id, spec.target_column, expr))
+
+    if not operations:
+        return None
+
+    contract_status = _evaluate_contracts(
+        spec, contracts, repoints=repoints, redefines_in_place=False
+    )
+    blast = {
+        "scheme": (
+            f"existing column `{spec.target_node}.{expr}` already carries the "
+            "new definition; no dbt change needed"
+        ),
+        "must_migrate_satisfied": list(spec.must_migrate),
+        "existing_artifacts_affected": [],
+    }
+    notes = [
+        f"Smallest possible plan. The {spec.new_definition.basis} basis is "
+        f"already computed in `{spec.target_node}.{expr}`. Only the consumer's "
+        "saved query / dashboard column reference needs to change."
+    ]
+    return DefinitionalChangePlan(
+        shape="consumer_only",
+        operations=operations,
+        contract_status=contract_status,
+        blast_radius=blast,
+        effort=len(operations),
+        score=_score_change_plan("consumer_only", operations, contract_status),
+        semantic_summary=(
+            f"Repoint must_migrate consumer(s) to read "
+            f"`{spec.target_node}.{expr}`, which already carries the "
+            f"{spec.new_definition.basis} definition. No dbt model change."
+        ),
+        notes=notes,
+    )
+
+
+def _score_change_plan(
+    shape: str,
+    operations: list[Operation],
+    contract_status: list[ContractStatus],
+) -> float:
+    """Higher = better.
+
+    +10 base
+    -1 per operation (effort)
+    -5 per held=False contract (a must_migrate consumer left on old definition)
+    -2 per SEMANTIC RISK note (silent meaning change for non-must_migrate consumer)
+    Shape preferences:
+    +1 consumer_only (no dbt change is genuinely cheaper)
+    +0.5 replace_in_place (single op, single-meaning end state)
+    -0.5 versioned_mart (heaviest pattern)
+    """
+    base = 10.0
+    effort_penalty = 1.0 * len(operations)
+    violations = sum(1 for cs in contract_status if not cs.held)
+    silent = sum(1 for cs in contract_status if "SEMANTIC RISK" in cs.note)
+    shape_bonus = {
+        "consumer_only": 1.0,
+        "replace_in_place": 0.5,
+        "add_versioned_column": 0.0,
+        "versioned_mart": -0.5,
+    }.get(shape, 0.0)
+    return base - effort_penalty - 5.0 * violations - 2.0 * silent + shape_bonus

@@ -138,3 +138,44 @@ class MetricRequest:
     filters: tuple[str, ...]
     consumer: Consumer
     contract_tier: str
+
+
+@dataclass(frozen=True)
+class Definition:
+    # Human label for the basis (e.g. "post_tax", "pre_tax", "excludes_returns").
+    # Used for human review and for plan-rendering disambiguation; the planner
+    # does not interpret it.
+    basis: str
+    # SQL expression that produces the column under this definition. The
+    # planner uses string-equality against existing column lineage to detect
+    # whether an existing column already satisfies the new definition (the
+    # consumer-only plan shape).
+    expr: str
+
+
+@dataclass(frozen=True)
+class DefinitionalChange:
+    id: str
+    intent: str
+    target_node: str
+    target_column: str
+    old_definition: Definition
+    new_definition: Definition
+    # Consumer artifact ids whose read of (target_node, target_column) has
+    # semantic dependency on the change. Per `PLANNER_NOTES.md` (decision c):
+    # plans satisfy this requirement only if every must_migrate consumer's
+    # read either flows from the new definition upstream or is repointed via
+    # an `update_consumer` op.
+    must_migrate: tuple[str, ...]
+    allow_stale_consumers: bool
+
+
+@dataclass(frozen=True)
+class Contract:
+    # Synthetic id, e.g. "C_executive_overview__customers__lifetime_spend".
+    # Stable across runs so plan diffs are readable.
+    id: str
+    consumer_artifact: str
+    node: str
+    column: str
+    tier: str

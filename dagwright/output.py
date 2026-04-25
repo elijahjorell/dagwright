@@ -1,8 +1,12 @@
 import json
 from dataclasses import asdict
 
-from dagwright.planner import Plan, Rejection
-from dagwright.state import MetricRequest
+from dagwright.planner import (
+    DefinitionalChangePlan,
+    Plan,
+    Rejection,
+)
+from dagwright.state import DefinitionalChange, MetricRequest
 
 
 def render_json(spec: MetricRequest, plans: list[Plan], rejections: list[Rejection]) -> str:
@@ -145,3 +149,120 @@ def _compact(v) -> str:
             return "[]"
         return "[ " + ", ".join(_compact(x) for x in v) + " ]"
     return str(v)
+
+
+# -----------------------------------------------------------------------------
+# definitional_change rendering
+# -----------------------------------------------------------------------------
+
+
+def render_json_definitional_change(
+    spec: DefinitionalChange,
+    plans: list[DefinitionalChangePlan],
+    rejections: list[Rejection],
+) -> str:
+    payload = {
+        "spec": asdict(spec),
+        "plans": [asdict(p) for p in plans],
+        "alternatives_rejected": [asdict(r) for r in rejections],
+    }
+    return json.dumps(payload, indent=2, default=str)
+
+
+def render_markdown_definitional_change(
+    spec: DefinitionalChange,
+    plans: list[DefinitionalChangePlan],
+    rejections: list[Rejection],
+) -> str:
+    lines: list[str] = []
+    lines.append(f"# Plan: `{spec.id}` (definitional_change)")
+    lines.append("")
+    lines.append(f"**Intent.** {spec.intent.strip()}")
+    lines.append("")
+    lines.append("**Change.**")
+    lines.append("")
+    lines.append(f"- target: `{spec.target_node}.{spec.target_column}`")
+    lines.append(
+        f"- old: `{spec.old_definition.expr}` "
+        f"({spec.old_definition.basis})"
+    )
+    lines.append(
+        f"- new: `{spec.new_definition.expr}` "
+        f"({spec.new_definition.basis})"
+    )
+    must_migrate_str = (
+        ", ".join(f"`{a}`" for a in spec.must_migrate) or "_(none)_"
+    )
+    lines.append(f"- must_migrate: {must_migrate_str}")
+    lines.append(f"- allow_stale_consumers: `{spec.allow_stale_consumers}`")
+    lines.append("")
+
+    if not plans:
+        lines.append("## No viable plans")
+        lines.append("")
+        lines.append(
+            "The planner could not enumerate any plan shape against the "
+            "supplied manifest. See **Alternatives rejected** for why."
+        )
+    else:
+        for i, plan in enumerate(plans, start=1):
+            lines.extend(_render_dc_plan_md(i, plan))
+
+    if rejections:
+        lines.append("## Alternatives rejected")
+        lines.append("")
+        for r in rejections:
+            lines.append(f"- **`{r.candidate_parent}`** — {r.reason}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_dc_plan_md(rank: int, plan: DefinitionalChangePlan) -> list[str]:
+    out: list[str] = []
+    out.append(f"## Plan {rank}: `{plan.shape}`")
+    out.append("")
+    out.append(f"_Score: {plan.score:.2f}_  _Effort: {plan.effort} ops_")
+    out.append("")
+    out.append(f"**Semantics.** {plan.semantic_summary}")
+    out.append("")
+
+    out.append("### Operations")
+    out.append("")
+    for j, op in enumerate(plan.operations, start=1):
+        out.append(f"{j}. `{op.op}`")
+        for k, v in op.args.items():
+            out.append(f"   - {k}: `{_compact(v)}`")
+    out.append("")
+
+    out.append("### Contract status")
+    out.append("")
+    for cs in plan.contract_status:
+        mark = "OK" if cs.held else "FAIL"
+        out.append(f"- **{cs.contract_id}** [{mark}] — {cs.note}")
+    out.append("")
+
+    out.append("### Blast radius")
+    out.append("")
+    blast = plan.blast_radius
+    out.append(f"- scheme: {blast['scheme']}")
+    must = blast.get("must_migrate_satisfied") or []
+    out.append(
+        f"- must_migrate satisfied: "
+        f"{', '.join(f'`{a}`' for a in must) or '_(none)_'}"
+    )
+    affected = blast.get("existing_artifacts_affected") or []
+    out.append(
+        f"- artifacts at risk: "
+        f"{', '.join(f'`{a}`' for a in affected) or '_(none)_'}"
+    )
+    out.append("")
+
+    if plan.notes:
+        out.append("### Notes")
+        out.append("")
+        for n in plan.notes:
+            out.append(f"- {n}")
+        out.append("")
+
+    return out

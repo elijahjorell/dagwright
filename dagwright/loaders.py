@@ -13,6 +13,8 @@ from dagwright.state import (
     Coverage,
     CoverageRange,
     DagState,
+    Definition,
+    DefinitionalChange,
     Edge,
     Grain,
     MeasureColumn,
@@ -135,22 +137,33 @@ def load_consumer_graph(path: Path) -> ConsumerGraph:
     return ConsumerGraph(tool=tool, artifacts=artifacts)
 
 
-def load_spec(path: Path) -> MetricRequest:
+def load_spec(path: Path):
+    """Dispatch on top-level `kind`. Returns the spec dataclass for
+    that kind. Callers branch on isinstance to dispatch to the
+    matching planner."""
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     if not isinstance(raw, dict):
         raise SpecError("spec must be a YAML mapping at the top level")
 
+    kind = raw.get("kind")
+    if kind == "metric_request":
+        return _parse_metric_request(raw)
+    if kind == "definitional_change":
+        return _parse_definitional_change(raw)
+    raise SpecError(
+        f"unsupported kind: {kind!r}. v0 supports: metric_request, definitional_change"
+    )
+
+
+def _parse_metric_request(raw: dict) -> MetricRequest:
     _require_keys(
         raw,
         required={"kind", "id", "intent", "metric", "consumer"},
         optional={"filters", "contract_tier"},
         where="spec",
     )
-
-    if raw["kind"] != "metric_request":
-        raise SpecError(f"v0 only supports kind: metric_request (got {raw['kind']!r})")
 
     spec_id = raw["id"]
     if not isinstance(spec_id, str) or not SLUG_RE.match(spec_id):
@@ -358,6 +371,86 @@ def _parse_column(raw, where: str) -> MeasureColumn:
             f"{where}.aggregation must be one of {sorted(ALLOWED_AGGREGATIONS)}; got {agg!r}"
         )
     return MeasureColumn(name=name, column=col, aggregation=agg, expr=None)
+
+
+def _parse_definitional_change(raw: dict) -> DefinitionalChange:
+    _require_keys(
+        raw,
+        required={
+            "kind", "id", "intent",
+            "target", "old_definition", "new_definition", "migration",
+        },
+        optional=set(),
+        where="spec",
+    )
+
+    spec_id = raw["id"]
+    if not isinstance(spec_id, str) or not SLUG_RE.match(spec_id):
+        raise SpecError(f"id must match {SLUG_RE.pattern}; got {spec_id!r}")
+
+    intent = raw["intent"]
+    if not isinstance(intent, str) or not intent.strip():
+        raise SpecError("intent must be a non-empty string")
+
+    target = raw["target"]
+    if not isinstance(target, dict):
+        raise SpecError("target must be a mapping")
+    _require_keys(target, required={"node", "column"}, optional=set(), where="target")
+    target_node = target["node"]
+    target_column = target["column"]
+    if not isinstance(target_node, str) or not SLUG_RE.match(target_node):
+        raise SpecError(f"target.node must be a slug; got {target_node!r}")
+    if not isinstance(target_column, str) or not SLUG_RE.match(target_column):
+        raise SpecError(f"target.column must be a slug; got {target_column!r}")
+
+    old_def = _parse_definition(raw["old_definition"], where="old_definition")
+    new_def = _parse_definition(raw["new_definition"], where="new_definition")
+
+    migration = raw["migration"]
+    if not isinstance(migration, dict):
+        raise SpecError("migration must be a mapping")
+    _require_keys(
+        migration,
+        required={"must_migrate", "allow_stale_consumers"},
+        optional=set(),
+        where="migration",
+    )
+    must_migrate_raw = migration["must_migrate"]
+    if not isinstance(must_migrate_raw, list):
+        raise SpecError("migration.must_migrate must be a list")
+    for a in must_migrate_raw:
+        if not isinstance(a, str) or not a:
+            raise SpecError(
+                f"migration.must_migrate entries must be non-empty strings; got {a!r}"
+            )
+    must_migrate = tuple(must_migrate_raw)
+    allow_stale = migration["allow_stale_consumers"]
+    if not isinstance(allow_stale, bool):
+        raise SpecError("migration.allow_stale_consumers must be a boolean")
+
+    return DefinitionalChange(
+        id=spec_id,
+        intent=intent,
+        target_node=target_node,
+        target_column=target_column,
+        old_definition=old_def,
+        new_definition=new_def,
+        must_migrate=must_migrate,
+        allow_stale_consumers=allow_stale,
+    )
+
+
+def _parse_definition(raw, where: str) -> Definition:
+    if not isinstance(raw, dict):
+        raise SpecError(f"{where} must be a mapping")
+    _require_keys(raw, required={"basis", "expr"}, optional=set(), where=where)
+    basis = raw["basis"]
+    expr = raw["expr"]
+    if not isinstance(basis, str) or not basis.strip():
+        raise SpecError(f"{where}.basis must be a non-empty string")
+    if not isinstance(expr, str) or not expr.strip():
+        raise SpecError(f"{where}.expr must be a non-empty string")
+    return Definition(basis=basis, expr=expr)
 
 
 def _require_keys(d: dict, required: set[str], optional: set[str], where: str) -> None:

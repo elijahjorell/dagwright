@@ -56,3 +56,14 @@ contract_operations:
       Remove a contract. Never emitted by the planner without an
       explicit retire-contract instruction in the spec; reserved for
       future deprecation/definitional_change types.
+
+  - id: update_consumer
+    args: [artifact, from_read, to_read]
+    description: >
+      Re-point a BI consumer's read from one source to another. Each
+      of `from_read` and `to_read` is a {node, column} or {node, expr}
+      pair. Emitted when a definitional_change requires a must_migrate
+      consumer's read to be moved without changing the upstream model
+      (the consumer-only plan shape), or alongside an `add_node` /
+      modify when the consumer follows the new definition to a new
+      column.
