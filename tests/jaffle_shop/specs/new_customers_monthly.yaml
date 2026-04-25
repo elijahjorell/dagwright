@@ -8,10 +8,18 @@ intent: >
 
 metric:
   name: new_customers_monthly
-  grain: [month]
-  measure:
-    column: customer_id
-    aggregation: count_distinct
+  output_shape:
+    grain:
+      keys: [month]
+      coverage:
+        month:
+          dense: true
+          range: {from: earliest_event, to: current_period}
+          fill: 0
+    columns:
+      - name: new_customers
+        column: customer_id
+        aggregation: count_distinct
 
 consumer:
   tool: metabase
