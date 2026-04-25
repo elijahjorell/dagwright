@@ -1,0 +1,97 @@
+# Target spec — not yet runnable.
+#
+# Design artifact for the dagwright domain spec format described
+# in CHARTER.md (post-rewrite). The current engine reads bare
+# metric_request specs, not domain envelopes. When the engine
+# extends to handle multi-spec input within a domain envelope,
+# this file becomes a real fixture; until then it exists for
+# review and to drive engine design.
+#
+# Story exercised: customer domain on jaffle_shop_modern. Two
+# forward requirements:
+#   (a) add new_customers_monthly metric.
+#   (b) align "lifetime spend" with finance's pre-tax definition.
+#
+# (b) is the preservation-under-change case. executive_overview's
+# contract on customers.lifetime_spend stays syntactically intact
+# (the column still exists, still reads from customers) while the
+# underlying meaning shifts. The planner should surface that this
+# is a contract risk even though the column-level read still
+# resolves, and rank plan alternatives accordingly.
+
+kind: domain
+id: customer
+intent: >
+  Customer domain on jaffle_shop_modern. Owns the customer mart.
+  Currently delivers customer overview to executive_overview.
+  Forward work: a monthly acquisition metric for the growth team,
+  and aligning "lifetime spend" with finance's pre-tax definition.
+
+scope:
+  models:
+    - stg_customers
+    - customers
+
+contracts:
+  # Pin every BI artifact's column reads on in-scope models. The
+  # engine cross-references the BI consumer graph to materialize
+  # the contract list — the AE doesn't redeclare what's already in
+  # metabase.json.
+  derive_from_bi: true
+  # Optional AE-authored contracts beyond the BI graph (saved
+  # queries, external pipelines, semantic invariants). Empty here.
+  additional: []
+  # Explicit relaxations of derived contracts — opt-in permission
+  # to break a column-level read. Empty here; both consumers stay
+  # protected.
+  relax: []
+
+forward_requirements:
+
+  - kind: metric_request
+    id: new_customers_monthly
+    intent: >
+      Growth team wants to track new customers acquired each month
+      on the growth dashboard.
+    metric:
+      name: new_customers_monthly
+      output_shape:
+        grain:
+          keys: [month]
+          coverage:
+            month:
+              dense: true
+              range: {from: earliest_event, to: current_period}
+              fill: 0
+        columns:
+          - name: new_customers
+            column: customer_id
+            aggregation: count_distinct
+    consumer:
+      tool: metabase
+      artifact: growth_dashboard
+
+  - kind: definitional_change
+    id: lifetime_spend_pretax
+    intent: >
+      Finance has standardized on pre-tax lifetime spend for
+      revenue reporting. executive_overview currently reads
+      customers.lifetime_spend, which is post-tax (equals
+      lifetime_spend_pretax + lifetime_tax_paid). Align the
+      dashboard's "lifetime spend" reading to the pre-tax basis
+      without breaking the executive_overview contract.
+    target:
+      node: customers
+      column: lifetime_spend
+    old_definition:
+      basis: post_tax
+      expr: lifetime_spend_pretax + lifetime_tax_paid
+    new_definition:
+      basis: pre_tax
+      expr: lifetime_spend_pretax
+    migration:
+      must_migrate:
+        - executive_overview
+      # Whether consumers may continue reading the old definition
+      # for a deprecation window. False = hard cutover.
+      allow_stale_consumers: false

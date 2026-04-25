@@ -81,6 +81,35 @@ candidates that fell *within* the slice but failed a filter
 (typically schema strictness). Plans that fall *outside* the slice
 never appear at all — neither as winners nor as rejections.
 
+## Contract semantics under change (decided)
+
+When a forward requirement changes the *meaning* of a column or
+expression an existing consumer reads, the engine must decide
+whether the consumer's contract is preserved. Three semantics were
+considered:
+
+- (a) Contract = column-level read only. Definitional change
+  preserves the contract syntactically; risk surfaces as a note.
+- (b) Contract = column read + its currently-implied semantics.
+  Any definitional change to the target violates the contract for
+  every consumer.
+- (c) Contract semantics declared by the spec via the
+  `migration.must_migrate` list. Consumers in the list have
+  semantic dependency; the contract is broken for them unless the
+  plan migrates their read. Consumers outside the list retain only
+  column-level dependency, with a note on definitional change.
+
+**Decision: (c).** The AE knows whether a consumer's number is
+supposed to track the new meaning or stay on the old. The engine
+doesn't infer. The `must_migrate` list is the spec field that
+declares semantic dependency.
+
+Implication: a plan satisfies a `definitional_change` requirement
+only if, for every consumer in `must_migrate`, the plan either
+(i) updates the source so the new definition flows through to that
+consumer's read, or (ii) emits an `update_consumer` operation that
+re-points the read.
+
 ## Planned widenings
 
 Each widening is independent and can be added one at a time, driven
@@ -95,6 +124,75 @@ fixture forces.
 | Modify-existing support | Adding a column to an existing mart instead of building a new one | `definitional_change` fixture |
 | Multi-hop chains | New INTERMEDIATE → new MART arrangements when no single eligible parent has the needed columns | A fixture where no single parent is feasible |
 | Operation-template variants | Tests, materialization choice, filter placement, naming alternatives | When a fixture's plan reads more clearly with a richer template |
+
+## Next slice (in design)
+
+The slice planned for the next engine iteration, scoped to the
+June 30 multi-spec milestone in `METRIC.md`. Target fixture:
+`tests/jaffle_shop_modern/specs/customer_domain.target.yaml`.
+
+What it adds beyond today's slice:
+
+1. **Domain envelope.** Top-level spec becomes `kind: domain`,
+   with `scope.models`, `contracts`, and `forward_requirements`.
+   Existing per-request shapes embed unchanged inside the list.
+2. **Contract derivation from the BI graph.** When
+   `contracts.derive_from_bi: true`, the engine materializes a
+   contract per (artifact, node, column) read on in-scope models.
+   `additional` and `relax` adjust the derived set.
+3. **`definitional_change` as a forward-requirement kind.** Plan
+   shapes the engine enumerates:
+   - Replace in place — violates contracts in `must_migrate` per
+     (c); surfaces as contract-broken, not invisible.
+   - Add a new column with the new definition; emit
+     `update_consumer` per consumer in `must_migrate`.
+   - Versioned mart (e.g. `customers_v2`); old node stays for
+     consumers not in `must_migrate`.
+   - Consumer-only change — when a column already on the target
+     node satisfies the new definition, plan is just
+     `update_consumer` ops, no dbt change.
+4. **`update_consumer` plan operation.** Catalog addition.
+5. **Multi-spec orchestration.** Each forward requirement planned
+   independently against the same domain state; outputs bundled.
+   Cross-requirement plan optimization deferred.
+
+What it explicitly does NOT add (deferred):
+
+- Auto-extraction of domain scope or contracts beyond what the AE
+  declares or what's already in the BI fixture.
+- Modify-existing for kinds other than `definitional_change`.
+- Cross-requirement plan interactions (shared intermediates,
+  conflict detection).
+- The Z3 rewrite. Still hand-coded enumeration.
+
+### Surgery (file-by-file)
+
+- `dagwright/state.py` — add `DomainSpec`, `Contract`,
+  `DefinitionalChange`, `ForwardRequirement` (tagged union).
+  Existing `MetricRequest` unchanged; nests inside
+  `DomainSpec.forward_requirements`.
+- `dagwright/loaders.py` — `load_domain_spec` dispatches on
+  top-level `kind`. Bare-`metric_request` loader stays as
+  fallback for backwards compatibility with the existing fixture.
+- `dagwright/planner.py` — `plan_domain` orchestrator;
+  `plan_definitional_change` enumerating the four plan shapes;
+  contract-derivation helper.
+- `dagwright/output.py` — bundle rendering; option-(c) violation
+  rendering.
+- `catalog/operations.yaml` — add `update_consumer`.
+- `dagwright/cli.py` — dispatch on top-level `kind`; no new
+  flags.
+
+### Order of work
+
+1. State types + loader for the domain envelope.
+2. `update_consumer` operation in catalog.
+3. `plan_definitional_change` against a minimal hand-built
+   fixture. **Load-bearing step** — if the four plan shapes don't
+   read as executable, the rest is wasted plumbing.
+4. Domain orchestrator + multi-spec rendering.
+5. Promote target spec from `.target` to a real fixture.
+6. End-to-end run on jaffle_shop_modern; log to METRIC.md.
 
 ## When the hand-coded engine gets retired
 
