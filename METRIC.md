@@ -26,6 +26,7 @@ _To be updated as the project progresses._
 | Date       | Count | Notes |
 |------------|-------|-------|
 | 2026-04-18 | 0     | Charter written, no code yet. |
+| 2026-04-24 | 1     | `dagwright plan` produces ranked plans for `new_customers_monthly` against jaffle_shop. Plan 1 (parent=customers, grain via first_order) is the executable plan: correct semantics for the intent, all engaged invariants hold, no existing-artifact risk. April 30 kill-criterion target hit 6 days early. |
 
 ## Leading indicators (track when relevant)
 
