@@ -1,32 +1,52 @@
 # Primary metric
 
-**Number of real-OSS-dbt-project plans produced that the author would
-actually execute.**
+**Number of executable plans the author would actually run, with the
+scope they exercise tracked alongside.**
 
-Measurement: the author reviews each generated plan. A plan counts as
-"executable" when:
+A plan counts as "executable" when:
 
-- The changes proposed are structurally sound
+- The proposed changes are structurally sound
 - Reusable pathways are correctly identified
 - Contracts are preserved
 - Grain is correct
-- The author would copy the plan into a PR without major revision
+- The author would copy the plan into a PR (or a sequence of PRs)
+  without major revision
+
+## Scope levels
+
+One engine, more of it exercised at each level. The metric tracks
+the highest scope reached and how often.
+
+- **n=1 (single-spec).** Existing models pinned by the requirement;
+  plan adds one thing. Exercises the planner end-to-end but not its
+  distinctive value.
+- **multi-spec.** Two or more forward requirements within one
+  domain; plan must satisfy them coherently. Exercises preservation
+  under change and ranked alternatives.
+- **domain-scoped.** Domain spec includes contracts derived from
+  real BI consumers; plan can restructure freely as long as
+  contracts hold. Exercises the full proposition.
 
 ## Target trajectory
 
-- **April 30, 2026** — 1 executable plan on `jaffle_shop`.
-- **May 31, 2026** — 5 executable plans across 3 OSS dbt projects.
-- **June 30, 2026** — 15 executable plans across 5 projects, shared
-  publicly with at least one external AE running it on their project.
+- **April 30, 2026** — 1 single-spec plan on `jaffle_shop`. **Hit
+  April 24, 2026.**
+- **June 30, 2026** — first multi-spec plan within one domain on
+  `jaffle_shop` or `jaffle_shop_modern`. Forward requirements include
+  at least one preservation-under-change case (e.g. a definitional
+  change or deprecation alongside a new metric).
+- **August 31, 2026** — first domain-scoped plan against a realistic
+  dbt project: at least one full domain in scope, at least one BI
+  consumer pinning contracts, plan judged executable.
+- **October 31, 2026** — at least one external AE has run a
+  domain-scoped plan on their own project.
 
 ## Current value
 
-_To be updated as the project progresses._
-
-| Date       | Count | Notes |
-|------------|-------|-------|
-| 2026-04-18 | 0     | Charter written, no code yet. |
-| 2026-04-24 | 1     | `dagwright plan` produces ranked plans for `new_customers_monthly` against jaffle_shop. Plan 1 (parent=customers, grain via first_order) is the executable plan: correct semantics for the intent, all engaged invariants hold, no existing-artifact risk. April 30 kill-criterion target hit 6 days early. |
+| Date       | Highest scope reached | Notes |
+|------------|------------------------|-------|
+| 2026-04-18 | none                   | Charter written, no code yet. |
+| 2026-04-24 | n=1 (single-spec)      | `dagwright plan` produces ranked plans for `new_customers_monthly` against `jaffle_shop`. Plan 1 (parent=customers, grain via first_order) is executable: correct semantics, all engaged invariants hold, no existing-artifact risk. April 30 kill-criterion hit 6 days early. |
 
 ## Leading indicators (track when relevant)
 
@@ -38,6 +58,6 @@ _To be updated as the project progresses._
 
 ## Kill-criteria-linked signal
 
-If the primary metric is still 0 on April 30, 2026, this is a
-sprawl/scope signal, not just a timing issue. Revisit `CHARTER.md`
+If no multi-spec plan is executable by June 30, 2026, this is a
+sprawl/scope signal, not a timing issue. Revisit `CHARTER.md`
 before writing more code.

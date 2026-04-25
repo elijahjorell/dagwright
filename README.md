@@ -1,10 +1,15 @@
 # dagwright
 
-Architectural change planner for analytics engineers.
+Architectural decisions in analytics DAGs have no separate medium —
+they happen implicitly when AEs write SQL — so DAGs decay over
+time: numbers stop tying, changes break things silently, refactors
+become impossible.
 
-Given a unified DAG state (dbt + BI-tool consumers) and a spec
-describing a desired DAG change, dagwright returns ranked change
-plans that preserve declared contracts and structural invariants.
+dagwright is the missing medium. Given a domain in an analytics DAG
+— its in-scope models, the contracts and consumers that must be
+preserved, and the requirements it must satisfy — dagwright returns
+ranked architectural plans that satisfy the requirements while
+preserving the contracts.
 
 Does not execute plans. Does not touch data. Emits plans; AE + AI
 execute them.
@@ -16,10 +21,15 @@ widenings — read before trusting a "no plans" output.
 
 ## Status
 
-v0: `dagwright plan` produces ranked plans for `metric_request`
-specs against the jaffle_shop fixture. The April 30, 2026
-kill-criterion was hit on April 24. Next milestone: 5 executable
-plans across 3 OSS dbt projects by May 31, 2026 — see `METRIC.md`.
+v0: `dagwright plan` produces ranked plans for single-spec
+(`metric_request`-shaped) requirements against the `jaffle_shop`
+fixture — the smallest case (n=1) of the engine. The April 30, 2026
+kill-criterion was hit on April 24. Next milestones (see
+`METRIC.md`):
+
+- **June 30, 2026** — first multi-spec plan within one domain.
+- **August 31, 2026** — first domain-scoped plan against a
+  realistic dbt project.
 
 The hand-coded planner has narrow bounds. Read `PLANNER_NOTES.md`
 before trusting a "no plans" output.

@@ -1,9 +1,12 @@
 # Business request types
 
-Taxonomy of stakeholder requests AEs receive against an analytics DAG.
-Each entry is a candidate `kind` for a dagwright-spec. This is the
-**input ontology** (what stakeholders ask). The **output ontology**
-(DAG operations the planner emits — add/remove/rewire nodes, change
+Taxonomy of stakeholder requests AEs receive against an analytics
+DAG. Each entry is a candidate `kind` for a forward requirement
+inside the dagwright-spec (the domain spec). One domain spec
+typically bundles several requirements of various kinds alongside
+the domain's scope and contracts to preserve. This is the **input
+ontology** (what stakeholders ask). The **output ontology** (DAG
+operations the planner emits — add/remove/rewire nodes, change
 grain, etc.) is separate and lives in `catalog/operations.yaml`.
 
 Listed for design context. A type is only official once it has a
@@ -95,8 +98,8 @@ distinctive value.
 
 ## Charter alignment
 
-`CHARTER.md` currently scopes the spec as "describing a desired
-metric." This document scopes the spec input space wider. The
-charter takes precedence; broader types listed here are
-forward-looking and not implemented until the charter is amended
-and a fixture example exists.
+`CHARTER.md` scopes the dagwright-spec as a domain spec containing
+scope, contracts to preserve, and a set of forward requirements.
+Each forward requirement uses one of the kinds catalogued above.
+v0 implements `metric_request`-shaped requirements only; broader
+kinds earn implementation as fixtures demand them.
