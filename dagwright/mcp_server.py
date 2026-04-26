@@ -320,6 +320,230 @@ def validate_spec(spec_path: str) -> dict:
     }
 
 
+@mcp.tool()
+def get_spec_schema(kind: str | None = None) -> dict:
+    """Machine-readable schema for one or all dagwright spec kinds.
+
+    Call once per session before authoring or editing a spec — gives
+    the LLM the canonical enum values, required fields, and shape
+    rules in context, so it doesn't have to discover them by reading
+    `specs/schema.md` or by making a wrong edit and reading the
+    `validate_spec` error.
+
+    Args:
+        kind: Optional. One of 'metric_request', 'definitional_change'.
+            Omit to receive schemas for all kinds.
+
+    Each per-kind descriptor includes:
+        summary: One-line purpose.
+        required_fields / optional_fields: Top-level keys.
+        enums: Field path -> list of allowed values, OR a string when
+            the value is constrained but not enumerable (e.g. ISO date
+            or a slug pattern).
+        patterns: Field path -> regex / shape rule.
+        shape_hints: Nuanced rules that don't fit a flat enum (XOR
+            between column forms, conditional requirements, etc.).
+        context_required: Fields whose values come from the dbt
+            manifest or BI graph; lists the lookup tool to use.
+        example: Canonical YAML excerpt.
+    """
+    _maybe_reload()
+    # Pull enums from the loaders module so this tool stays in sync
+    # automatically when the parser's allow-list changes.
+    from dagwright.loaders import (
+        ALLOWED_AGGREGATIONS,
+        ALLOWED_TIERS,
+        SLUG_RE,
+        SUPPORTED_BI_TOOLS,
+        SYMBOLIC_RANGE_VALUES,
+    )
+    from dagwright.state import TIME_LIKE_KEYS
+
+    slug_pattern = SLUG_RE.pattern
+
+    schemas = {
+        "metric_request": {
+            "summary": (
+                "A metric that does not yet exist in the DAG, that "
+                "should. dagwright proposes the DAG additions to make "
+                "it exist, ranked by reuse and contract preservation."
+            ),
+            "required_fields": ["kind", "id", "intent", "metric", "consumer"],
+            "optional_fields": ["filters", "contract_tier"],
+            "enums": {
+                "kind": ["metric_request"],
+                "metric.output_shape.columns[].aggregation": sorted(ALLOWED_AGGREGATIONS),
+                "consumer.tool": sorted(SUPPORTED_BI_TOOLS),
+                "contract_tier": sorted(ALLOWED_TIERS),
+                "metric.output_shape.grain.coverage.<key>.dense": [True, False],
+                "metric.output_shape.grain.coverage.<key>.range.from": (
+                    f"ISO date 'YYYY-MM-DD' OR one of {sorted(SYMBOLIC_RANGE_VALUES)}"
+                ),
+                "metric.output_shape.grain.coverage.<key>.range.to": (
+                    f"ISO date 'YYYY-MM-DD' OR one of {sorted(SYMBOLIC_RANGE_VALUES)}"
+                ),
+                "time_like_grain_keys": sorted(TIME_LIKE_KEYS),
+            },
+            "patterns": {
+                "id": f"slug, regex: {slug_pattern}",
+                "metric.name": f"slug, regex: {slug_pattern}",
+                "metric.output_shape.grain.keys[]": f"slug, regex: {slug_pattern}",
+                "metric.output_shape.columns[].name": f"slug, regex: {slug_pattern}",
+            },
+            "shape_hints": {
+                "metric.output_shape.columns[]": (
+                    "Each entry is EXACTLY ONE OF: structured form "
+                    "{name, column, aggregation} OR expr form {name, "
+                    "from}. Never both, never neither."
+                ),
+                "metric.output_shape.grain.coverage": (
+                    "Required for every grain key in TIME_LIKE_KEYS "
+                    f"({sorted(TIME_LIKE_KEYS)}); optional for entity "
+                    "keys. When `dense: true`, `range` is required."
+                ),
+                "metric.output_shape.columns": (
+                    "Grain keys are implicit; do not list them in "
+                    "columns. Result schema is grain.keys ∪ "
+                    "[c.name for c in columns]."
+                ),
+                "filters": (
+                    "List of SQL boolean expressions, ANDed. Free-form "
+                    "SQL — not validated structurally."
+                ),
+            },
+            "context_required": {
+                "metric.output_shape.columns[].column": (
+                    "Must exist in the declared schema of some dbt "
+                    "model. Use `summarize_manifest` to enumerate "
+                    "marts and their schemas."
+                ),
+                "consumer.artifact": (
+                    "Named BI dashboard / question / collection. "
+                    "Use `summarize_manifest` exposures field, or "
+                    "the BI consumer graph JSON (--bi flag), to find "
+                    "valid artifact names."
+                ),
+            },
+            "example": (
+                "kind: metric_request\n"
+                "id: monthly_revenue\n"
+                "intent: Track total revenue by month for the finance dashboard.\n"
+                "metric:\n"
+                "  name: revenue_by_month\n"
+                "  output_shape:\n"
+                "    grain:\n"
+                "      keys: [month]\n"
+                "      coverage:\n"
+                "        month: {dense: true, range: {from: earliest_event, to: current_period}, fill: 0}\n"
+                "    columns:\n"
+                "      - name: total_revenue\n"
+                "        column: amount\n"
+                "        aggregation: sum\n"
+                "consumer:\n"
+                "  tool: metabase\n"
+                "  artifact: finance_dashboard\n"
+                "contract_tier: standard\n"
+            ),
+        },
+
+        "definitional_change": {
+            "summary": (
+                "Change the definition of an existing column on an "
+                "existing node, with explicit declaration of which "
+                "consumers must move to the new meaning vs. stay on "
+                "the old."
+            ),
+            "required_fields": [
+                "kind", "id", "intent", "target",
+                "old_definition", "new_definition", "migration",
+            ],
+            "optional_fields": [],
+            "enums": {
+                "kind": ["definitional_change"],
+                "migration.allow_stale_consumers": [True, False],
+            },
+            "patterns": {
+                "id": f"slug, regex: {slug_pattern}",
+                "target.node": f"slug, regex: {slug_pattern}",
+                "target.column": f"slug, regex: {slug_pattern}",
+            },
+            "shape_hints": {
+                "old_definition / new_definition": (
+                    "Both are mappings with required keys {basis, "
+                    "expr}. `basis` is a short label naming the "
+                    "definition (e.g. 'post_tax', 'pre_tax'). `expr` "
+                    "is the SQL expression — free-form, not validated "
+                    "structurally."
+                ),
+                "migration.must_migrate": (
+                    "List of BI artifact IDs whose reads MUST move to "
+                    "the new definition. Consumers outside this list "
+                    "stay on the old definition. Empty list is valid "
+                    "(documents that no consumer is being moved)."
+                ),
+                "migration.allow_stale_consumers": (
+                    "When false: hard cutover. When true: consumers "
+                    "outside must_migrate may continue reading the "
+                    "old definition for a deprecation window."
+                ),
+            },
+            "context_required": {
+                "target.node": (
+                    "Must be a real model in the dbt manifest. Use "
+                    "`summarize_manifest` to enumerate models."
+                ),
+                "target.column": (
+                    "Must be in the declared schema of target.node "
+                    "(strict: SQL-only columns invisible). Use "
+                    "`summarize_manifest` marts entries."
+                ),
+                "migration.must_migrate[]": (
+                    "Each entry is a BI artifact ID. Use "
+                    "`summarize_manifest` exposures, or the --bi JSON, "
+                    "to find valid IDs."
+                ),
+            },
+            "example": (
+                "kind: definitional_change\n"
+                "id: lifetime_spend_pretax\n"
+                "intent: >\n"
+                "  Finance has standardized on pre-tax lifetime spend.\n"
+                "  Align executive_overview's reading without breaking\n"
+                "  the contract.\n"
+                "target:\n"
+                "  node: customers\n"
+                "  column: lifetime_spend\n"
+                "old_definition:\n"
+                "  basis: post_tax\n"
+                "  expr: lifetime_spend_pretax + lifetime_tax_paid\n"
+                "new_definition:\n"
+                "  basis: pre_tax\n"
+                "  expr: lifetime_spend_pretax\n"
+                "migration:\n"
+                "  must_migrate:\n"
+                "    - executive_overview\n"
+                "  allow_stale_consumers: false\n"
+            ),
+        },
+    }
+
+    if kind is not None:
+        if kind not in schemas:
+            return {
+                "error": f"unknown kind: {kind!r}",
+                "available_kinds": sorted(schemas.keys()),
+            }
+        return {
+            "kinds": sorted(schemas.keys()),
+            "schema": schemas[kind],
+        }
+
+    return {
+        "kinds": sorted(schemas.keys()),
+        "schemas": schemas,
+    }
+
+
 def _to_jsonable(obj: Any) -> Any:
     """Coerce dataclass-or-dict-or-primitive into JSON-friendly form.
     Handles nested dataclasses; falls back to str() for unknown types."""

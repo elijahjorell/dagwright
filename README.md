@@ -155,7 +155,7 @@ Add to your Claude Code MCP config (typically
 }
 ```
 
-The server exposes four tools:
+The server exposes five tools:
 
 - **`plan(spec_path, manifest_path, bi_path?, top?)`** — the main
   one. Returns serialized spec, ranked plans, rejections, and (on
@@ -165,6 +165,13 @@ The server exposes four tools:
   cleanly. Useful between an LLM-driven spec edit and the next
   `plan` call so the LLM can self-correct invalid edits without
   round-tripping through a planner failure.
+- **`get_spec_schema(kind?)`** — machine-readable schema for one or
+  all spec kinds: required/optional fields, enum values, regex
+  patterns, shape rules, context lookups, and a canonical example.
+  Call once per session before authoring or editing a spec so the
+  LLM has the canonical vocabulary in context rather than
+  discovering it by reading `specs/schema.md` or by making a wrong
+  edit and reading the validate_spec error.
 - **`discover_specs(root_path)`** — walks a directory, returns
   spec paths grouped by kind and id. Lets the LLM find specs
   without the AE having to recite paths.
