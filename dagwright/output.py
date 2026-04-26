@@ -96,6 +96,14 @@ def _render_plan_md(rank: int, plan: Plan) -> list[str]:
     out.append(f"- New artifact this plan binds a contract to: `{blast['new_artifact']}`")
     out.append("")
 
+    if plan.risks:
+        out.append("### Risks")
+        out.append("")
+        for r in plan.risks:
+            out.append(f"- **{r.id}** [{r.severity.upper()}] — {r.summary}")
+            out.append(f"  - *Mitigation:* {r.mitigation}")
+        out.append("")
+
     if plan.notes:
         out.append("### Notes")
         out.append("")
@@ -267,6 +275,14 @@ def _render_dc_plan_md(rank: int, plan: DefinitionalChangePlan) -> list[str]:
     else:
         out.append("- downstream dbt models potentially affected: _(none)_")
     out.append("")
+
+    if plan.risks:
+        out.append("### Risks")
+        out.append("")
+        for r in plan.risks:
+            out.append(f"- **{r.id}** [{r.severity.upper()}] — {r.summary}")
+            out.append(f"  - *Mitigation:* {r.mitigation}")
+        out.append("")
 
     if plan.notes:
         out.append("### Notes")

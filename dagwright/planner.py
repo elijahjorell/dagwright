@@ -8,6 +8,11 @@ from dagwright.loaders import (
     load_manifest,
     load_spec,
 )
+from dagwright.risks import (
+    Risk,
+    detect_definitional_change_risks,
+    detect_metric_risks,
+)
 from dagwright.state import (
     ConsumerGraph,
     Contract,
@@ -77,6 +82,9 @@ class Plan:
     score: float
     semantic_summary: str
     notes: list[str] = field(default_factory=list)
+    # Structured risks the AE should be aware of. Detected from spec +
+    # parent + grain combo at plan-build time. See dagwright/risks.py.
+    risks: list[Risk] = field(default_factory=list)
 
 
 @dataclass
@@ -453,6 +461,7 @@ def build_plan(
         score=score,
         semantic_summary=semantic_summary,
         notes=notes,
+        risks=detect_metric_risks(spec, parent_name, grain_resolution),
     )
 
 
@@ -646,6 +655,7 @@ def build_dense_plan(
         score=score,
         semantic_summary=semantic_summary,
         notes=notes,
+        risks=detect_metric_risks(spec, parent_name, grain_resolution),
     )
 
 
@@ -803,6 +813,9 @@ class DefinitionalChangePlan:
     score: float
     semantic_summary: str
     notes: list[str] = field(default_factory=list)
+    # Structured risks the AE should be aware of for this plan shape.
+    # See dagwright/risks.py.
+    risks: list[Risk] = field(default_factory=list)
 
 
 def plan_definitional_change(
@@ -1050,6 +1063,7 @@ def _plan_replace_in_place(
             "All consumers see the new value at the same column name."
         ),
         notes=notes,
+        risks=detect_definitional_change_risks(spec, "replace_in_place"),
     )
 
 
@@ -1123,6 +1137,7 @@ def _plan_add_versioned_column(
             f"`{spec.target_column}` is unchanged."
         ),
         notes=notes,
+        risks=detect_definitional_change_risks(spec, "add_versioned_column"),
     )
 
 
@@ -1212,6 +1227,7 @@ def _plan_versioned_mart(
             "on the old definition."
         ),
         notes=notes,
+        risks=detect_definitional_change_risks(spec, "versioned_mart"),
     )
 
 
@@ -1278,6 +1294,7 @@ def _plan_consumer_only(
             f"{spec.new_definition.basis} definition. No dbt model change."
         ),
         notes=notes,
+        risks=detect_definitional_change_risks(spec, "consumer_only"),
     )
 
 
