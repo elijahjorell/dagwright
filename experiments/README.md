@@ -89,10 +89,61 @@ If the thesis holds, the CSV should show:
 - Pricing is not baked in. Sonnet and Opus rates differ ~5×; quote
   the exact rates alongside any cost claim derived from this CSV.
 
+### Experiment C — `determinism.py`
+
+Determinism receipts. The trivial slam-dunk: anyone can re-run this
+and reproduce the same hashes.
+
+Runs each fixture N times (default 3), in both `json` and `markdown`
+formats, hashes each output, asserts byte-identical across runs.
+Today's data: 24 compiles across 4 fixtures × 2 formats × 3 runs,
+every single run byte-identical. Mattermost compile averages ~75ms;
+the small fixtures average ~5–8ms.
+
+Run:
+
+```bash
+uv run --no-sync python experiments/determinism.py
+uv run --no-sync python experiments/determinism.py --runs 5
+```
+
+The complementary claim — that an LLM run twice on the same prompt
+produces different output — is asserted but not measured here.
+That's a separate experiment (and costs money). What this proves is
+the dagwright half of the asymmetry.
+
+### Experiment E — `sweep.py`
+
+Bulk-benchmark for the CHARTER's "Bulk analysis" claim — generate
+plans across a parameter sweep in seconds, not hours and dollars.
+
+Generates N copies of a base spec by varying the spec id and (where
+present) the consumer artifact. The plans end up nearly identical —
+that's intentional. This is throughput, not plan-quality coverage.
+
+Run:
+
+```bash
+uv run --no-sync python experiments/sweep.py                   # 100 plans on jaffle_shop_modern
+uv run --no-sync python experiments/sweep.py --manifest mattermost -n 200
+```
+
+Today's data:
+
+| Fixture | N | total wall | mean / spec | LLM-only projection (tokens) | LLM Sonnet | LLM Opus |
+|---|---|---|---|---|---|---|
+| jaffle_shop_modern | 100 | 0.70 s | ~7 ms | 3.8 M | ~$25 | ~$125 |
+| mattermost (302 models, real-world) | 50 | 3.88 s | ~77 ms | 1.9 M | ~$12 | ~$63 |
+
+The LLM cost projection assumes 38K tokens per plan (the CHARTER's
+stated figure for prose-plan regeneration). Override via
+`--tokens-per-llm-plan <n>` once Experiment B has produced a
+measured value. Pricing rates baked into the harness are
+approximate Sonnet 4.6 / Opus 4.7 rates as of April 2026; verify
+against current published rates before quoting.
+
 ## Future experiments
 
-- **C** — determinism receipts (trivial, half-day).
-- **E** — sweep / bulk benchmark (half-day).
 - **A** — head-to-head with a quality rubric (2–3 days, including
   rubric design).
 - **D** — stability under spec rephrasing (half-day).
