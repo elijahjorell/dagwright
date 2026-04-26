@@ -194,13 +194,13 @@ mode is the operational form of the iteration-during-plan-shaping
 use case the project is built around.
 
 Each re-run after the first prints a **plan diff** before the full
-plan output: which plan shapes appeared or disappeared, which scores
-or ranks changed, which contract statuses flipped, which downstream
-models were added or removed. The AE doesn't see the spec edit
-during iteration, so the plan-side delta is what bridges "I asked
-for X" with "here's what got different in the plan." Plan diff is
-implemented for `definitional_change` plans in v0; `metric_request`
-plans pass through without a diff section.
+plan output: which plans appeared or disappeared, which scores or
+ranks changed, which contract statuses flipped (definitional_change),
+which ops were added or removed, which downstream / parent consumers
+shifted. The AE doesn't see the spec edit during iteration, so the
+plan-side delta is what bridges "I asked for X" with "here's what
+got different in the plan." Diffs are produced for both
+`metric_request` and `definitional_change` specs.
 
 Invalid YAML mid-edit is caught and reported without crashing the
 watcher; `Ctrl+C` exits cleanly.

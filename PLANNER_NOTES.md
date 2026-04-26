@@ -196,10 +196,12 @@ What it explicitly does NOT add (deferred):
 
 ## Plan diff implementation state
 
-`dagwright/diff.py` implements `diff_dc_plans(prev, curr)` for
-`DefinitionalChangePlan` lists. Per shape (`consumer_only`,
-`replace_in_place`, `add_versioned_column`, `versioned_mart`) it
-surfaces:
+`dagwright/diff.py` covers both spec kinds. `diff_plans(prev, curr,
+spec)` dispatches on spec type:
+
+`diff_dc_plans` (definitional_change) — identity is the `shape`
+discriminator (`consumer_only`, `replace_in_place`,
+`add_versioned_column`, `versioned_mart`). Surfaces:
 
 - Score deltas (any change > 0.01)
 - Rank changes (1-indexed)
@@ -212,12 +214,13 @@ surfaces:
 - Downstream dbt models: adds and removes from
   `blast_radius.downstream_dbt_models`
 
-### Not yet implemented
-
-- **`metric_request` plan diff.** The `Plan` dataclass has a
-  different shape (no `shape` discriminator; ranked by parent +
-  grain resolution). Closing this gap means watch + diff work for
-  both kinds; symmetry work, ~half-day.
+`diff_mr_plans` (metric_request) — identity is `(parent, grain
+signature)`, where the grain signature names the source column for
+each derived resolution and `direct` for direct ones. Surfaces
+score deltas, rank changes, plan adds/removes, ops adds/removes
+(modifications surface as a remove + add pair), parent-consumer
+adds/removes from `blast_radius.parent_consumers_unchanged`, and
+consumer artifact rename via `blast_radius.new_artifact`.
 
 ### Audience reframe (dogfood finding, April 25, 2026)
 

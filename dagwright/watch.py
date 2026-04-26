@@ -18,9 +18,8 @@ from pathlib import Path
 
 from watchfiles import watch
 
-from dagwright.diff import diff_dc_plans
+from dagwright.diff import diff_plans
 from dagwright.loaders import SpecError
-from dagwright.state import DefinitionalChange
 
 
 def watch_command(args) -> int:
@@ -95,10 +94,11 @@ def _run_once(args, state: _WatchState, header: str) -> None:
         )
         return
 
-    # Diff (if applicable). Only DefinitionalChange has a diff
-    # implementation in v0; metric_request plans pass through.
-    if isinstance(spec, DefinitionalChange) and isinstance(state.previous_spec_kind, type) and state.previous_spec_kind is DefinitionalChange:
-        diff_md = diff_dc_plans(state.previous_plans, plans)
+    # Diff against the previous run only when the spec kind is the
+    # same — switching from a metric_request to a definitional_change
+    # spec produces incomparable plan lists.
+    if state.previous_plans and state.previous_spec_kind is type(spec):
+        diff_md = diff_plans(state.previous_plans, plans, spec)
         if diff_md:
             print("\n### Diff vs previous run\n", flush=True)
             print(diff_md, flush=True)

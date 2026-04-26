@@ -84,6 +84,11 @@ def _maybe_reload() -> None:
 # Survives module reloads of planner/diff because mcp_server itself
 # is not in the reload set.
 _previous_plans: dict[str, list] = {}
+# Class name of the previously-seen spec per spec_path. Stored as a
+# string (not a type) so it survives `_maybe_reload()` swapping out
+# `dagwright.state.DefinitionalChange` and friends for fresh class
+# objects — `is` comparison would always be False after reload.
+_previous_spec_kind: dict[str, str] = {}
 
 
 @mcp.tool()
@@ -108,14 +113,13 @@ def plan(
             blast radius, scores, semantic summary, notes)
         rejections: candidates the planner ruled out and why
         diff: markdown summary of what changed vs the previous call
-            on this spec_path. Empty string on the first call or for
-            metric_request specs (diff not yet supported there).
+            on this spec_path. Empty string on the first call, or
+            when the spec kind changed between calls.
     """
     _maybe_reload()
     # Lazy-import so we get whatever versions just got (re-)loaded.
     from dagwright.planner import run_plan
-    from dagwright.diff import diff_dc_plans
-    from dagwright.state import DefinitionalChange
+    from dagwright.diff import diff_plans
 
     spec_path_abs = str(Path(spec_path).resolve())
     args = SimpleNamespace(
@@ -128,11 +132,12 @@ def plan(
     spec, plans, rejections = run_plan(args)
 
     diff_md = ""
-    if isinstance(spec, DefinitionalChange):
-        prev = _previous_plans.get(spec_path_abs)
-        if prev is not None:
-            diff_md = diff_dc_plans(prev, plans)
-        _previous_plans[spec_path_abs] = list(plans)
+    prev = _previous_plans.get(spec_path_abs)
+    prev_kind = _previous_spec_kind.get(spec_path_abs)
+    if prev is not None and prev_kind == type(spec).__name__:
+        diff_md = diff_plans(prev, plans, spec)
+    _previous_plans[spec_path_abs] = list(plans)
+    _previous_spec_kind[spec_path_abs] = type(spec).__name__
 
     return {
         "spec": _to_jsonable(spec),

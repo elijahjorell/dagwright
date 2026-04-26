@@ -6,16 +6,29 @@ for X" with "here's what got different in the plan." Re-reading two
 full plans side by side defeats the iteration loop. This module
 produces a compact markdown summary of what changed.
 
-v0 supports DefinitionalChangePlan only. metric_request plans have
-a different shape (no `shape` discriminator, ranked by parent + grain
-resolution); diffing those is a follow-up.
+Two plan kinds are supported, each with its own identity scheme:
+
+- `DefinitionalChangePlan` (definitional_change specs): identity is
+  the `shape` discriminator (consumer_only, replace_in_place,
+  add_versioned_column, versioned_mart). Surfaces score deltas, rank
+  changes, contract held/note shifts, op adds/removes, and downstream
+  dbt model adds/removes.
+
+- `Plan` (metric_request specs): identity is `(parent, grain
+  signature)` — the parent node plus the per-key resolution (direct
+  or which date column it derives from). Surfaces score deltas, rank
+  changes, op adds/removes, and parent-consumer adds/removes.
+
+Use `diff_plans(prev, curr, spec)` to dispatch on spec kind without
+the call site having to know which plan type is in play.
 """
 
 from __future__ import annotations
 
 import json
 
-from dagwright.planner import DefinitionalChangePlan, Operation
+from dagwright.planner import DefinitionalChangePlan, Operation, Plan
+from dagwright.state import DefinitionalChange, MetricRequest
 
 
 def diff_dc_plans(
@@ -143,6 +156,136 @@ def diff_dc_plans(
         return "_(no semantic changes since last run)_"
 
     return "\n".join(lines)
+
+
+def diff_plans(prev: list, curr: list, spec) -> str:
+    """Dispatch to the right diff helper based on the spec kind.
+    Returns empty string when no comparator exists for the kind."""
+    if isinstance(spec, DefinitionalChange):
+        return diff_dc_plans(prev, curr)
+    if isinstance(spec, MetricRequest):
+        return diff_mr_plans(prev, curr)
+    return ""
+
+
+def diff_mr_plans(prev: list[Plan], curr: list[Plan]) -> str:
+    """Render a markdown summary of what changed between two ranked
+    metric_request Plan lists. Plan identity is `(parent, grain
+    signature)`: two plans are 'the same plan' across runs iff they
+    aggregate the same parent at the same grain via the same source
+    column for each grain key. Returns a one-line "no changes"
+    message if scores, ranks, ops, and parent consumers are all
+    identical. Returns empty string if `prev` is empty."""
+    if not prev:
+        return ""
+
+    prev_by_id = {_mr_plan_id(p): (i, p) for i, p in enumerate(prev)}
+    curr_by_id = {_mr_plan_id(p): (i, p) for i, p in enumerate(curr)}
+    ids = sorted(set(prev_by_id) | set(curr_by_id))
+
+    lines: list[str] = []
+    found = False
+
+    for pid in ids:
+        if pid not in prev_by_id:
+            _, p = curr_by_id[pid]
+            lines.append(
+                f"- new plan `{pid}` (rank {p_rank(curr_by_id, pid)}, "
+                f"score {p.score:.2f})"
+            )
+            found = True
+            continue
+        if pid not in curr_by_id:
+            _, p = prev_by_id[pid]
+            lines.append(
+                f"- removed plan `{pid}` (was rank "
+                f"{p_rank(prev_by_id, pid)}, score {p.score:.2f})"
+            )
+            found = True
+            continue
+
+        prev_rank, prev_plan = prev_by_id[pid]
+        curr_rank, curr_plan = curr_by_id[pid]
+
+        score_delta = curr_plan.score - prev_plan.score
+        if abs(score_delta) > 0.01:
+            sign = "+" if score_delta > 0 else ""
+            lines.append(
+                f"- `{pid}`: score {prev_plan.score:.2f} → "
+                f"{curr_plan.score:.2f} ({sign}{score_delta:.2f})"
+            )
+            found = True
+
+        if prev_rank != curr_rank:
+            lines.append(f"- `{pid}`: rank {prev_rank + 1} → {curr_rank + 1}")
+            found = True
+
+        # Operations diff. The metric_request template is fixed (4
+        # ops, or 6 in the dense path), but op args carry the
+        # spec-driven content — column lineage, schema, grain entity,
+        # filters — so a spec edit typically shows up here as a
+        # remove + add pair.
+        prev_op_sigs = {_op_signature(o): o for o in prev_plan.operations}
+        curr_op_sigs = {_op_signature(o): o for o in curr_plan.operations}
+        for sig in sorted(set(prev_op_sigs) | set(curr_op_sigs)):
+            if sig in prev_op_sigs and sig not in curr_op_sigs:
+                lines.append(
+                    f"- `{pid}` op removed: {_op_one_line(prev_op_sigs[sig])}"
+                )
+                found = True
+            elif sig in curr_op_sigs and sig not in prev_op_sigs:
+                lines.append(
+                    f"- `{pid}` op added: {_op_one_line(curr_op_sigs[sig])}"
+                )
+                found = True
+
+        # Parent-consumer adds/removes — surfaces manifest / BI graph
+        # drift even when the spec didn't change.
+        prev_consumers = set(
+            prev_plan.blast_radius.get("parent_consumers_unchanged") or []
+        )
+        curr_consumers = set(
+            curr_plan.blast_radius.get("parent_consumers_unchanged") or []
+        )
+        added = curr_consumers - prev_consumers
+        removed = prev_consumers - curr_consumers
+        if added or removed:
+            parts = []
+            if added:
+                parts.append("+" + ", ".join(f"`{n}`" for n in sorted(added)))
+            if removed:
+                parts.append("-" + ", ".join(f"`{n}`" for n in sorted(removed)))
+            lines.append(f"- `{pid}` parent consumers: {' '.join(parts)}")
+            found = True
+
+        # Consumer artifact rename in the spec.
+        prev_new = prev_plan.blast_radius.get("new_artifact")
+        curr_new = curr_plan.blast_radius.get("new_artifact")
+        if prev_new != curr_new:
+            lines.append(
+                f"- `{pid}` consumer: `{prev_new}` → `{curr_new}`"
+            )
+            found = True
+
+    if not found:
+        return "_(no semantic changes since last run)_"
+
+    return "\n".join(lines)
+
+
+def _mr_plan_id(p: Plan) -> str:
+    """Stable identity for a metric_request plan across runs.
+    `direct` resolutions collapse to the grain key alone (the source
+    is the key itself); derived resolutions name the source column
+    so two plans differing only by which date column they truncate
+    have distinct identities."""
+    parts = [p.parent]
+    for gr in p.grain_resolutions:
+        if gr.via == "direct":
+            parts.append(f"{gr.grain_key}=direct")
+        else:
+            parts.append(f"{gr.grain_key}={gr.source_column}")
+    return " · ".join(parts)
 
 
 def p_rank(by_shape: dict, shape: str) -> int:
