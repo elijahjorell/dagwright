@@ -47,12 +47,27 @@ they don't read YAML — they trust the LLM edit, see the resulting
 plan, and react. The spec persists in git for commit-time and
 post-mortem review, but during iteration nobody human looks at it.
 
-To make this work in practice, watch mode renders a **plan diff**
+To make this work in practice, dagwright renders a **plan diff**
 between consecutive runs — what changed in the ranked plan list as
 a result of the latest spec edit. The AE didn't see the spec edit;
 they need the plan-side delta to connect "I asked for X" with
 "here's what got different in the plan" without reading two full
 plans side by side.
+
+**A finding from dogfooding the MCP integration (April 25, 2026):**
+when an LLM is the consumer of dagwright's structured output, the
+plan-diff field is *partially redundant* — Claude can derive the
+same signals (operation adds/removes, contract note shifts, score
+deltas) from the raw `plans` and `contract_status` fields it
+already receives in the response. The diff comparator is therefore
+most valuable for **non-LLM consumers**: the `dagwright watch`
+terminal output, CI / sweep scripts, and humans reading raw
+artifact files. This doesn't reduce dagwright's overall value —
+the artifact properties (determinism, reproducibility, persistence)
+still hold for both audiences — but it does reframe the diff
+comparator as developer-experience infrastructure for non-LLM
+workflows rather than as the LLM-facing output enhancement it was
+originally pitched as.
 
 **Bottleneck per iteration is the LLM edit (~5–15s, ~5–10K tokens),
 not dagwright (~20ms, 0 tokens).** The headline value isn't "1000×

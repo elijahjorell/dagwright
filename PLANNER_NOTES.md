@@ -194,6 +194,41 @@ What it explicitly does NOT add (deferred):
 5. Promote target spec from `.target` to a real fixture.
 6. End-to-end run on jaffle_shop_modern; log to METRIC.md.
 
+## Plan diff implementation state
+
+`dagwright/diff.py` implements `diff_dc_plans(prev, curr)` for
+`DefinitionalChangePlan` lists. Per shape (`consumer_only`,
+`replace_in_place`, `add_versioned_column`, `versioned_mart`) it
+surfaces:
+
+- Score deltas (any change > 0.01)
+- Rank changes (1-indexed)
+- New / removed plan shapes
+- Contract status: held flips (OK ↔ FAIL), contract adds/removes,
+  note shifts (classified into a small label set:
+  `MODEL-LEVEL must_migrate` ↔ `MODEL-LEVEL not-flagged` etc.)
+- Operations: adds and removes by canonical-JSON signature
+  (modifications surface as a remove + add pair)
+- Downstream dbt models: adds and removes from
+  `blast_radius.downstream_dbt_models`
+
+### Not yet implemented
+
+- **`metric_request` plan diff.** The `Plan` dataclass has a
+  different shape (no `shape` discriminator; ranked by parent +
+  grain resolution). Closing this gap means watch + diff work for
+  both kinds; symmetry work, ~half-day.
+
+### Audience reframe (dogfood finding, April 25, 2026)
+
+The MCP-driven dogfood revealed that when an LLM is the consumer,
+the diff field is partially redundant — Claude derives the same
+signals (op adds/removes, note shifts, score deltas) from the raw
+`plans` and `contract_status` fields. The diff comparator's primary
+audience is therefore **non-LLM consumers**: `dagwright watch`,
+CI / sweep scripts, and humans reading raw artifacts. See
+`CHARTER.md` for the full discussion.
+
 ## When the hand-coded engine gets retired
 
 CHARTER calls for a Z3-based engine: rule evaluation and plan
