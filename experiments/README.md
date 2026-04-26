@@ -92,40 +92,102 @@ If the thesis holds, the CSV should show:
 
 #### Today's data
 
-First real run, 2026-04-26, `claude-sonnet-4-6`, task
-`new_customers_monthly` (jaffle_shop_modern), 6 iterations per
-agent. CSV: `experiments/results/iteration_cost.csv`.
+Two runs against `claude-sonnet-4-6` on 2026-04-26. CSV:
+`experiments/results/iteration_cost.csv`.
+
+**Aggregate across 3 tasks × 6 iterations × 2 agents (54 API
+calls):**
 
 | | control (LLM-only) | treatment (dagwright) | ratio |
 |---|---|---|---|
-| Total tokens (6 iters) | 80,275 (55,145 in / 25,130 out) | 6,275 (4,413 in / 1,862 out) | **12.8×** |
-| Total wall-clock | 455.5 s | 21.6 s | **21.1×** |
-| Iter 5 input tokens | 19,995 | 424 | **47×** |
-| Iter 5 wall-clock | 119.7 s | 3.0 s | **40×** |
-| Spend at Sonnet 4.6 rates | ~$0.54 | ~$0.04 | 13.2× |
+| Total tokens | 346,325 (249,470 in / 96,855 out) | 25,980 (19,318 in / 6,662 out) | **13.3×** |
+| Total wall-clock | 1,578.5 s (~26 min) | 77.8 s (~1.3 min) | **20.3×** |
+| Spend at Sonnet 4.6 rates | ~$2.20 | ~$0.16 | 13.7× |
 
-Per-iteration shape matched the thesis exactly:
+**Per-task ratios (control / treatment):**
 
-- **Control input grows monotonically** (734 → 2,891 → 6,350 →
-  10,429 → 14,746 → 19,995 tokens) as conversation history
-  accumulates. The cost-per-iteration curve is super-linear in
-  iteration count because each turn re-feeds all prior turns.
-- **Treatment is flat after iter 0** (~400 input tokens per
-  refinement; iter 0 is heavier at 2,411 because it carries the
-  full spec schema + manifest summary). dagwright's own compile is
-  5–41 ms per iteration.
-- All 6 treatment iterations compiled cleanly through dagwright —
-  the LLM-edited specs were structurally valid every time.
+| Task | Spec kind | Manifest | Tokens | Wall |
+|---|---|---|---|---|
+| `new_customers_monthly` | metric_request | jaffle_shop_modern | **8.8×** | **10.3×** |
+| `lifetime_spend_pretax` | definitional_change | jaffle_shop_modern | **21.6×** | **31.9×** |
+| `dau_desktop_only` | definitional_change | mattermost (302 models) | **11.7×** | **20.1×** |
 
-Total run spend: ~$0.58. Total wall-clock: ~8 minutes (single-
-threaded; both agents run sequentially).
+The thesis holds across spec kinds and manifest scales:
 
-The headline ratios (12.8×, 21.1×) are weaker than the absolute
-delta on later iterations (47×, 40× by iter 5) because iter 0 is
-where treatment pays its setup cost. The ratio-vs-iteration-count
-curve only gets steeper as iterations extend — by iter 10 the
-control is sending ~50K input tokens per call and the treatment
-is still at ~400.
+- **Control input grows monotonically** in every task. By iter 5,
+  control is sending 13K–38K input tokens per call (depending on
+  manifest size in the prompt history). Each refinement re-feeds
+  the full conversation; the curve is super-linear.
+- **Treatment is flat after iter 0** in every task (~400–700 input
+  tokens per refinement; iter 0 is heavier because it carries the
+  schema + manifest summary). dagwright's own compile scales with
+  manifest size: ~7 ms on jaffle_shop_modern, ~70–150 ms on
+  Mattermost — still negligible vs. the LLM call.
+- **The ratio gap is widest on `lifetime_spend_pretax`** (21.6×
+  tokens) because the prose plan for a definitional change is
+  longer than for a metric_request — the LLM enumerates migration
+  shapes and contract analysis in prose every iteration. Treatment
+  edits the same 4-line `migration:` block.
+
+#### Honest finding from this run: schema-rejection failures
+
+This run also surfaced a real failure mode in the treatment that
+wasn't visible in the first run of B: **15 of 18 treatment
+refinement iterations produced specs that dagwright rejected as
+schema-invalid.** The LLM made up YAML keys not in the spec
+schema:
+
+- `metric.output_shape: unknown keys ['filters']` (filters belong
+  at the spec root, not nested under output_shape)
+- `migration: unknown keys ['deprecation_window']` (no such field)
+- `spec: unknown keys ['contract', 'preserved_column']` (extra
+  fields the LLM invented to express the refinement)
+- `spec: missing required keys ['new_definition']` (LLM dropped a
+  required field while restructuring)
+
+Two readings of this finding:
+
+1. **The cost ratio is still informative.** Even when the LLM
+   makes schema mistakes, treatment uses ~13× fewer tokens than
+   control because the LLM is producing small structured edits
+   instead of multi-thousand-token prose plans. The mistakes are
+   detectable (dagwright's `validate_spec` returns a pointed
+   error) and recoverable in production via the MCP server's
+   round-trip loop.
+2. **The harness doesn't measure end-to-end iteration cost
+   honestly** because it lacks a retry-on-validate-error step.
+   The docstring claims "the harness retries once with the
+   validate_spec error appended" but that wasn't actually
+   implemented. A real AE-in-the-loop or MCP-driven session would
+   catch the schema error and re-prompt; that costs ~1 extra LLM
+   call per failed iteration. With retries, treatment tokens go
+   up ~2-3× and the headline ratio drops to maybe ~5× — still a
+   real saving, but not 13×.
+
+**Action:** wire a single retry step in `run_treatment` (call
+validate_spec; if it errors, append the error to the prompt and
+ask the LLM for a corrected YAML; re-validate once). Re-run B
+and report both numbers (with vs. without retry). Until then, the
+13× headline is the no-retry token-only ratio; treat it as an
+upper bound on dagwright's cost saving.
+
+#### Inter-run variance
+
+The same task (`new_customers_monthly`) was run twice today:
+
+| Run | Control tokens | Treatment tokens | Ratio | Treatment iters compiled? |
+|---|---|---|---|---|
+| 1 (single-task) | 80,275 | 6,275 | 12.8× | 6/6 |
+| 2 (multi-task) | 54,710 | 6,202 | 8.8× | 1/6 |
+
+Treatment was nearly identical (6,275 vs 6,202 tokens). Control
+was meaningfully different (80K vs 55K) because Anthropic's API
+at temperature 0 isn't perfectly deterministic across runs and
+the prose plans varied in length. The LLM in run 2 also made
+schema mistakes that run 1 didn't make — same prompt, different
+behaviour. **The order of magnitude is robust; specific ratios
+are sample-dependent.** Quote ranges, not point estimates,
+unless the receipt covers many seeds.
 
 #### Methodological note: SDK vs Claude Code orchestration
 

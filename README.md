@@ -27,24 +27,31 @@ reasoning through the LLM each time.
 ## Receipts
 
 Per-iteration cost comparison. The "iteration" granularity matters.
-First two rows are measured (Experiment B, Sonnet 4.6, N=1 task,
-6 iterations); see `experiments/README.md` for run conditions and
-`experiments/results/iteration_cost.csv` for the per-iteration data.
+First two rows are measured (Experiment B, Sonnet 4.6, replicated
+across 3 tasks × 6 iterations × 2 agents — 54 API calls total);
+see `experiments/README.md` for run conditions, per-task ratios,
+and the schema-rejection caveat.
 
 | | dagwright + LLM-edits-spec | LLM-only (prose plan, regenerated) |
 |---|---|---|
-| Time per iteration (avg over 6) | 3.6 s | 76 s — and growing (40 s on iter 0 → 120 s on iter 5) |
-| Tokens per iteration (avg over 6) | ~1,000 | ~13,400 — growing 2,800 → 26,200 with history |
+| Time per iteration (avg) | ~4 s | ~88 s — and growing with history |
+| Tokens per iteration (avg) | ~1,400 | ~19,200 — growing through the run |
 | Same input → same output | yes (dagwright is deterministic) | no |
 | Output as data (diff-able, queryable) | yes | no |
 | Plan content quality | not yet rigorously tested | not yet rigorously tested (one informal task: LLM-only richer first plan) |
 | SQL / data / decision equivalence | untested | untested |
 
-Headline from the same run: **12.8× total token ratio, 21.1×
-total wall-clock ratio across 6 iterations on a single task.** The
-gap widens with iteration count because the control re-feeds full
-conversation history each turn while the treatment sends only the
-current spec + the refinement.
+Aggregate across the 3 tasks: **13.3× total token ratio, 20.3×
+total wall-clock ratio.** Per-task ratios range 8.8×–21.6× on
+tokens and 10.3×–31.9× on wall-clock. The gap widens with iteration
+count because the control re-feeds full conversation history each
+turn while the treatment sends only the current spec + the
+refinement. **Caveat:** in this run, 15/18 treatment refinement
+iterations produced schema-invalid YAML that dagwright rejected;
+the cost ratio is for "tokens spent" not "iteration end-to-end."
+Wiring a validate-and-retry loop in the harness is the next step
+before treating the headline as load-bearing — see
+`experiments/README.md` for the full discussion.
 
 **Notes on the comparison.** The dagwright step itself is ~20 ms and
 0 tokens; the iteration cost above is the end-to-end loop including
