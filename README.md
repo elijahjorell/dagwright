@@ -34,16 +34,27 @@ Per-iteration cost comparison. The "iteration" granularity matters:
 | Tokens per iteration | ~5–10K (small targeted edit) | ~38K (full plan) |
 | Same input → same output | yes (dagwright is deterministic) | no |
 | Output as data (diff-able, queryable) | yes | no |
-| Plan content quality | comparable | sometimes richer |
+| Plan content quality | not yet rigorously tested | not yet rigorously tested (one informal task: LLM-only richer first plan) |
+| SQL / data / decision equivalence | untested | untested |
 
 **Notes on the comparison.** The dagwright step itself is ~20 ms and
 0 tokens; the iteration cost above is the end-to-end loop including
-the LLM doing a small spec edit. The intellectual content of the
-plan is not the differentiator — Claude with the manifest in context
-produces plans of comparable or richer quality. What dagwright adds:
-the LLM is freed from re-running the planning step every iteration
-(it just edits the spec), the resulting plans are deterministic data,
-and the iteration is cheap enough that AEs actually iterate.
+the LLM doing a small spec edit. What dagwright adds: the LLM is
+freed from re-running the planning step every iteration (it just
+edits the spec), the resulting plans are deterministic data, and
+the iteration is cheap enough that AEs actually iterate.
+
+**What we have NOT measured.** Plan content equivalence and outcome
+equivalence (does the SQL implied by the plan produce the same data
+as what an AE+LLM would write?) are untested. The single data point
+we have — the April 25 Mattermost dogfood — actually showed Claude-
+in-chat producing a *richer* first plan than dagwright. The
+artifact-property pivot rests on the assumption that the gap is
+small enough that determinism, persistence, and per-iteration cost
+dominate. That assumption is defensible, not demonstrated.
+Experiments H1 / H2 (plan→SQL → data execution) are designed to
+close the SQL/data layer; longitudinal outcome equivalence requires
+external users (post-Aug-31).
 
 ## What it's good for
 
@@ -68,10 +79,14 @@ and the iteration is cheap enough that AEs actually iterate.
 
 ## What it's *not*
 
-- **Not a replacement for AE + LLM thinking.** A free-form Claude
-  session with the manifest in context produces plans of comparable
-  quality to dagwright's, sometimes richer (deeper semantic
-  awareness, framing pushback, broader plan-shape coverage).
+- **Not a replacement for AE + LLM thinking.** The single first-party
+  comparison we have (April 25, 2026, Mattermost) showed a free-form
+  Claude session with the manifest in context produced a *richer*
+  first plan than dagwright — broader alternatives, deeper semantic
+  awareness, framing pushback. The thesis is not "plans are
+  identical"; it's "plans are good enough that the artifact
+  properties are worth the integration cost." The "good enough" floor
+  is itself untested.
 - **Not a forcing function for considering alternatives.** AEs and
   competent LLMs already consider alternatives. The spec records
   what they thought, but doesn't generate the thought.

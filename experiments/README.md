@@ -142,6 +142,92 @@ measured value. Pricing rates baked into the harness are
 approximate Sonnet 4.6 / Opus 4.7 rates as of April 2026; verify
 against current published rates before quoting.
 
+### Experiment H1 — `sql_equivalence.py`
+
+The first measurement of outcome equivalence. Tests whether
+dagwright's plan, deterministically rendered to SQL, structurally
+matches what a competent AE would write by hand for the same task.
+
+H1 is paired with a deterministic plan→SQL renderer
+(`dagwright/sql_render.py`) that handles:
+
+- Sparse metric_request plans (no dense axis): SELECT-GROUP BY.
+- Dense metric_request plans with ISO-dated range endpoints:
+  `WITH date_spine AS (range(...))` + LEFT JOIN.
+- Dense plans with symbolic range endpoints (`earliest_event`,
+  `current_period`): degraded fallback to `SELECT DISTINCT
+  <source_expr>` from the parent table.
+
+Run:
+
+```bash
+uv run --no-sync python experiments/sql_equivalence.py
+uv run --no-sync python experiments/sql_equivalence.py --emit  # always print rendered SQL
+```
+
+Today's data: 1 / 1 fixtures structurally equivalent on
+`new_customers_monthly` (jaffle_shop_modern). The dagwright plan
+renders to SQL that, after whitespace + comment normalization,
+matches a hand-written canonical for the same task.
+
+#### Honest finding from H1: symbolic-range gap
+
+The `new_customers_monthly` fixture has
+`range: {from: earliest_event, to: current_period}` — symbolic
+endpoints. dagwright cannot resolve them to concrete dates without
+warehouse access. The renderer falls back to `SELECT DISTINCT
+date_trunc(...)` from the source, which technically only emits
+months that have data. A "true" date_spine that fills genuine gaps
+requires either:
+
+- an AE-side post-processing step to substitute concrete dates into
+  `range()`, or
+- dagwright extension to read warehouse metadata at compile time
+  (would break the zero-cost / zero-dependency property).
+
+**This is a real gap, not a rendering bug.** The H1 canonical SQL
+matches dagwright's degraded fallback; the experiment validates
+that the renderer is *deterministic and matches what dagwright
+emits today*. It does not validate that what dagwright emits is
+identical to what a senior AE would have written. That's the
+remaining gap.
+
+The canonical SQL in `sql_equivalence.py` is annotated to make
+this gap visible to anyone reading the test.
+
+### Experiment H2 — data-level outcome equivalence (scaffolded, not wired)
+
+Continuation of H1: execute both the dagwright-rendered SQL and a
+canonical hand-written SQL against a populated jaffle_shop DuckDB,
+diff the resulting datasets row-by-row.
+
+Status: **not yet runnable.** The `tests/jaffle_shop_modern/`
+fixture only ships the manifest.json (DAG state); it doesn't
+include a populated `.duckdb` file with seeded data. Setup needed:
+
+```bash
+git clone --depth=1 https://github.com/dbt-labs/jaffle-shop ~/jaffle_shop_modern_src
+cd ~/jaffle_shop_modern_src
+uv venv --python 3.12
+uv pip install dbt-core dbt-duckdb
+# (set up profiles.yml — see tests/jaffle_shop_modern/REGENERATE.md)
+DBT_PROFILES_DIR=. .venv/Scripts/dbt seed
+DBT_PROFILES_DIR=. .venv/Scripts/dbt run
+# now jaffle_shop.duckdb exists with all the source + intermediate + mart tables
+```
+
+Once that exists, H2's harness needs to:
+
+1. Run the dagwright-rendered SQL against the DuckDB; capture results.
+2. Run the canonical SQL against the same DB; capture results.
+3. Diff: same row count? same columns? same values? sample-level diff
+   when divergent.
+4. Report per-fixture: `[MATCH]`, `[DIFF rows]`, `[DIFF values]`.
+
+Effort: ~half a day on top of the populated DB setup. Genuinely
+strong receipt — moves outcome equivalence from "anecdotal" to
+"data-level on jaffle_shop, untested elsewhere."
+
 ## Future experiments
 
 - **A** — head-to-head with a quality rubric (2–3 days, including
