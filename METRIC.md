@@ -71,12 +71,17 @@ The artifact-property pivot reshapes what to track alongside the
 primary metric:
 
 - **Iteration loops per AE session.** How many spec variations does
-  an AE try before settling on the plan they execute? If consistently
-  1, the iteration story isn't landing — they're still committing
-  to the first plan, and the speed advantage isn't translating into
-  changed behavior. Higher numbers mean the workflow shift the
-  project is selling is actually happening. Hard to measure without
-  telemetry; worth at least tracking informally during dogfooding.
+  an AE try before settling on the plan they execute? "Iteration"
+  here means a full round-trip — the AE describes a variation, the
+  LLM edits the spec, dagwright re-plans, the AE reads the result.
+  Each round-trip is ~5–15 s + ~5–10K tokens (the LLM edit is the
+  bottleneck; dagwright is ~20 ms + 0 tokens within it). If this
+  count is consistently 1, the iteration story isn't landing —
+  they're still committing to the first plan, and the cost
+  advantage isn't translating into changed behavior. Higher numbers
+  mean the workflow shift the project is selling is actually
+  happening. Hard to measure without telemetry; worth at least
+  tracking informally during dogfooding.
 - **Latency.** Time from CLI invocation to JSON/markdown output.
   Must stay sub-second for typical manifests. Floor: ~milliseconds.
   Ceiling: 1 second. The iteration-loop benefit collapses if
@@ -92,11 +97,12 @@ primary metric:
   If this is zero, the artifact isn't doing its persistence job
   even if the iteration loop is being used.
 - **Spec authoring cost.** Time and tokens an LLM spends turning
-  a natural-language stakeholder note into a valid dagwright-spec.
-  Must stay below what one round-trip of LLM plan generation
-  would cost; otherwise the layer is net-negative. (Once the AE
-  is iterating on the spec, the per-iteration cost drops to zero
-  — the spec-fill cost is paid once at the start of the loop.)
+  a natural-language stakeholder note into a valid dagwright-spec
+  *the first time*. Must stay below what one round-trip of LLM
+  plan generation would cost; otherwise the layer is net-negative.
+  After the initial spec exists, *per-iteration* edit cost (a few
+  thousand tokens, 5–15 s) is what's paid as the AE explores
+  variations.
 - **Sweep capability.** Largest N specs run in one batch (`dagwright
   sweep` or equivalent). Institutional metric, follows from the
   same speed property as iteration loops but at scale.

@@ -8,24 +8,45 @@ don't make the change.
 ## Problem (one paragraph)
 
 When an analytics engineer plans a DAG change today, the planning
-happens — but it's slow and ephemeral. AE+LLM workflows produce plans
-as prose in chat sessions; each plan costs ~150 seconds and ~$0.50
-per iteration. At that price the AE picks the first plausible plan
-and writes SQL — they don't iterate, because the cost of trying a
-variation is meaningful. The plan also doesn't survive: not
-reproducible (same prompt twice → different plans), not reviewable
-as an artifact separate from the SQL it produces, not diff-able when
-the DAG changes, not generatable at scale. The thinking is fine; the
-**iteration speed** and the **persistence** are the problems — and
-the iteration speed is what most directly shapes the AE's
-architectural decisions.
+happens — but it's slow and ephemeral. AE+LLM workflows produce
+plans as prose in chat sessions; each iteration regenerates a plan
+end-to-end via the LLM, costing tens-of-seconds and tens of thousands
+of tokens. At that price the AE picks the first plausible plan and
+writes SQL — they don't iterate, because the cost of trying a
+variation is real. The plan also doesn't survive: not reproducible
+(same prompt twice → different plans), not reviewable as an artifact
+separate from the SQL it produces, not diff-able when the DAG
+changes, not generatable at scale. The thinking is fine; the
+**iteration cost** and the **persistence** are the problems.
 
 ## Aim (one sentence)
 
-Make AE+LLM architectural change planning a fast feedback loop:
-sub-second, deterministic, free plan iteration so AEs converge on a
-plan by **exploring** rather than **committing** to the first plausible
-candidate.
+Split the planning work across the right tools — let the LLM do small
+targeted spec edits (cheap, what it's good at) and let dagwright do
+the deterministic plan enumeration (free, what *it's* good at) — so
+AEs can iterate cheaply enough to converge on a plan by **exploring**
+rather than **committing** to the first plausible candidate.
+
+## How the workflow actually runs
+
+In practice the AE doesn't hand-edit YAML. The typical loop is:
+
+1. AE describes the change or a variation in natural language to
+   their LLM tool ("exclude product_pulse from must_migrate").
+2. LLM edits the spec file and saves.
+3. dagwright (in watch mode) detects the save and re-runs the
+   planner in milliseconds.
+4. AE reads the new ranked plans.
+5. AE describes the next variation. Loop.
+
+**The bottleneck per iteration is the LLM edit (~5–15s, ~5–10K
+tokens), not dagwright (~20ms, 0 tokens).** The headline value isn't
+"1000× faster" — it's the split of labor: small targeted edits cost
+a fraction of full prose-plan regeneration (~30–150s, ~38K tokens
+for a from-scratch plan), and the planning step that would otherwise
+also run through the LLM is offloaded to a deterministic, reproducible
+engine. The AE can afford 5–10 iterations in the time/cost of one
+end-to-end LLM round-trip.
 
 ## What dagwright is *not*
 
@@ -64,21 +85,22 @@ The properties above turn dagwright into a fast feedback loop for
 AE+LLM plan-shaping. The headline benefit is per-AE and every-use:
 
 - **Iteration during plan-shaping.** The cost of trying a plan
-  variation drops to zero — both in time and in dollars. AEs stop
-  committing to the first plausible plan and start exploring:
-  *what if `must_migrate` excluded `product_pulse`? what if I split
-  this into two specs? what if the new_definition pointed at a
-  different column?* Each variation produces a fresh ranked plan in
-  milliseconds. Convergence happens by exploring the local
-  neighborhood of the spec, not by reasoning about it abstractly
-  before the first run. **This is the central value of dagwright —
-  fast feedback during plan-shaping changes how AEs make
-  architectural decisions.** All the properties above (deterministic,
-  structured, fast, free) exist to enable this loop. Everything else
-  is downstream. Operational form: `dagwright watch` re-runs the
-  planner on every save of the spec / manifest / BI graph, so the
-  iteration loop becomes "save → see plans" with no command in
-  between.
+  variation drops by roughly an order of magnitude vs. full prose-
+  plan regeneration. AEs stop committing to the first plausible
+  plan and start exploring: *what if `must_migrate` excluded
+  `product_pulse`? what if I split this into two specs? what if the
+  new_definition pointed at a different column?* The LLM does the
+  small spec edit; dagwright does the deterministic re-plan in
+  milliseconds; the AE reads the new plan. Convergence happens by
+  exploring the local neighborhood of the spec, not by reasoning
+  about it abstractly before the first run. **This is the central
+  value of dagwright — affordable iteration during plan-shaping
+  changes how AEs make architectural decisions.** All the properties
+  above (deterministic, structured, fast, free) exist to enable
+  this loop. Everything else is downstream. Operational form:
+  `dagwright watch` re-runs the planner whenever the spec / manifest
+  / BI graph changes — whether the change came from an AE editor,
+  an LLM tool, or a programmatic agent.
 
 The same speed and cost properties have institutional follow-on
 benefits at team / org scale, useful but secondary to the per-AE

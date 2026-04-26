@@ -1,44 +1,53 @@
 # dagwright
 
 A **fast feedback loop** for AE+LLM architectural change planning.
-Plan iteration drops from ~150 seconds + ~$0.50 per LLM round-trip
-to ~20 ms + $0 per dagwright run, changing how AEs converge on a
-plan: from committing to the first plausible candidate, to exploring
-20 variations during a coffee break.
+Splits the work right: the LLM does small targeted spec edits (cheap,
+what it's good at); dagwright does the deterministic plan enumeration
+(free, what *it's* good at). End-to-end iteration drops from
+~30–150 s + ~38K tokens per LLM round-trip to ~5–15 s + ~5–10K tokens
+(LLM edit time only), with the dagwright step adding ~20 ms + 0
+tokens per re-plan. AEs can afford 5–10 iterations in the time and
+cost of one full prose-plan regeneration.
 
 dagwright doesn't replace your LLM. It's the deterministic, structured,
 free artifact layer your LLM workflows don't have today — the surface
-you iterate against while your LLM does the thinking on either side.
+your LLM edits against, instead of regenerating planning prose
+end-to-end.
 
 ## Receipts
 
-| | dagwright | AE + Claude as prose |
+Per-iteration cost comparison. The "iteration" granularity matters:
+
+| | dagwright + LLM-edits-spec | LLM-only (prose plan, regenerated) |
 |---|---|---|
-| Latency, real-world manifest (302 models) | ~20 ms | ~150 s |
-| Tokens per plan | 0 | ~38,700 |
-| Same input → same output | always | no |
+| Time per iteration | ~5–15 s (LLM edit + ~20 ms dagwright) | ~30–150 s |
+| Tokens per iteration | ~5–10K (small targeted edit) | ~38K (full plan) |
+| Same input → same output | yes (dagwright is deterministic) | no |
 | Output as data (diff-able, queryable) | yes | no |
 | Plan content quality | comparable | sometimes richer |
 
-The intellectual content of the plan is *not* the differentiator. AE +
-Claude with the manifest in context produces plans of comparable or
-richer quality than dagwright. What dagwright adds is the artifact
-shape — and the speed and cost properties that make new use cases
-viable.
+**Notes on the comparison.** The dagwright step itself is ~20 ms and
+0 tokens; the iteration cost above is the end-to-end loop including
+the LLM doing a small spec edit. The intellectual content of the
+plan is not the differentiator — Claude with the manifest in context
+produces plans of comparable or richer quality. What dagwright adds:
+the LLM is freed from re-running the planning step every iteration
+(it just edits the spec), the resulting plans are deterministic data,
+and the iteration is cheap enough that AEs actually iterate.
 
 ## What it's good for
 
 - **Plan iteration during development — the headline.** The cost of
-  trying a plan variation drops to ~zero. AEs stop committing to the
-  first plausible plan and start exploring: *what if must_migrate
-  excluded one consumer? what if I split this into two specs? what
-  if the new_definition pointed at a different column?* Each
-  variation produces a fresh ranked plan in milliseconds.
-  Convergence happens by exploring the local neighborhood of the
-  spec rather than reasoning about it abstractly before the first
-  run. **Fast feedback during plan-shaping changes how AEs make
-  architectural decisions.** Everything below is a downstream
-  consequence of the same speed-and-cost property.
+  trying a plan variation drops by roughly an order of magnitude vs.
+  full prose-plan regeneration. AEs stop committing to the first
+  plausible plan and start exploring: *what if must_migrate excluded
+  one consumer? what if I split this into two specs? what if the
+  new_definition pointed at a different column?* The LLM does the
+  small spec edit (5–15 s, a few thousand tokens), dagwright does
+  the deterministic re-plan in milliseconds, the AE reads the new
+  plan. **Affordable iteration during plan-shaping changes how AEs
+  make architectural decisions.** Everything below is a downstream
+  consequence of the same property.
 - **CI gates.** `dagwright check` on every PR to verify a spec
   satisfies declared contracts. Sub-second; zero token cost.
 - **Bulk planning.** Generate plans across many specs (parameter
