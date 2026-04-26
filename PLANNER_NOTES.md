@@ -73,8 +73,11 @@ them to be enumerated:
      fallback recovers the dominant rename pattern but misses
      anything more elaborate at the source boundary.
    - Cost: full lineage build on Mattermost (302 models, 6 MB
-     manifest) takes ~5–6 s vs ~70 ms for the previous regex-only
-     extractor. Acceptable for CLI use; watch mode reloads only on
+     manifest) takes ~500 ms vs ~70 ms for the regex-only baseline.
+     The slow path (multi-parent / expression-derived columns)
+     parses + qualifies + builds a single sqlglot Scope per model,
+     then reuses it across all output columns — without the scope-
+     reuse, the same workload took ~5 s. Watch mode reloads only on
      spec changes so the cost is paid once per session.
 5. **Date detection by heuristic.** A column is "date-like" iff:
    one of `{date, time, timestamp, datetime}` appears as a whole

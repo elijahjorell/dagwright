@@ -172,10 +172,16 @@ def extract_lineage_sqlglot(
     output column doesn't appear in it. Per-column failures are silently
     skipped; the caller can fall back to regex for those.
 
-    ``upstream_schemas`` maps node name to the list of column names that
-    node exposes. Pass ``[]`` for nodes whose columns aren't documented
-    — sqlglot will fail to resolve ``*`` from them but other columns
-    may still resolve fine.
+    Performance: parses, qualifies, and builds a Scope **once** per
+    model, then reuses the scope for each output column's lineage
+    walk. Without this reuse, sqlglot re-parses and re-qualifies the
+    SQL on every ``lineage()`` call — order-of-magnitude slowdown on
+    real-world manifests with hundreds of models and ~10 columns each.
+
+    ``upstream_schemas`` maps node name to the list of column names
+    that node exposes. Pass ``[]`` for nodes whose columns aren't
+    documented — sqlglot will fail to resolve ``*`` from them but
+    other columns may still resolve fine.
     """
     if not raw_code or not output_columns:
         return {}
@@ -184,6 +190,8 @@ def extract_lineage_sqlglot(
         from sqlglot import exp as _sg_exp
         from sqlglot import lineage as _sg_lineage
         from sqlglot.errors import SqlglotError
+        from sqlglot.optimizer.qualify import qualify as _sg_qualify
+        from sqlglot.optimizer.scope import build_scope as _sg_build_scope
     except ImportError:
         return {}
 
@@ -193,25 +201,43 @@ def extract_lineage_sqlglot(
         for node, cols in upstream_schemas.items()
     }
 
-    # sqlglot's lineage walker returns table-alias-qualified leaves
-    # (``c.id`` for ``FROM customers AS c``). Build a map from each
-    # alias to the underlying table name so we can translate leaves
-    # back to real names.
+    # Parse once per model. Qualifying resolves table aliases, expands
+    # SELECT *, and threads schema info through CTEs — expensive enough
+    # to amortise across all output columns by sharing the scope.
+    try:
+        expression = sqlglot.parse_one(sql, dialect=dialect)
+    except (SqlglotError, ValueError, AttributeError):
+        return {}
+
+    # Pull alias→underlying-table map from the parsed AST so leaves
+    # like ``c.id`` from ``FROM customers AS c`` can be translated
+    # back to ``customers.id`` when we filter against upstream_schemas.
     alias_to_table: dict[str, str] = {}
     try:
-        parsed = sqlglot.parse_one(sql, dialect=dialect)
-        for tbl in parsed.find_all(_sg_exp.Table):
+        for tbl in expression.find_all(_sg_exp.Table):
             tbl_name = tbl.name
             tbl_alias = tbl.alias
             if tbl_alias and tbl_alias != tbl_name:
                 alias_to_table[tbl_alias] = tbl_name
-    except (SqlglotError, AttributeError, ValueError):
+    except (SqlglotError, AttributeError):
         pass
+
+    # Qualify + build the Scope once. lineage(scope=...) skips its
+    # internal parse + qualify + build_scope.
+    try:
+        qualified = _sg_qualify(
+            expression.copy(), schema=schema, dialect=dialect
+        )
+        scope = _sg_build_scope(qualified)
+    except (SqlglotError, ValueError, AttributeError, KeyError):
+        return {}
 
     out: dict[str, list[tuple[str, str]]] = {}
     for col in output_columns:
         try:
-            root = _sg_lineage.lineage(col, sql, schema=schema, dialect=dialect)
+            root = _sg_lineage.lineage(
+                col, qualified, schema=schema, dialect=dialect, scope=scope
+            )
         except (SqlglotError, KeyError, AttributeError, RecursionError, ValueError):
             continue
         leaves = _walk_to_leaves(root, alias_to_table)
@@ -234,22 +260,36 @@ def _walk_to_leaves(
 ) -> list[tuple[str, str]]:
     """Collect (table, column) leaves from a sqlglot lineage tree.
     Leaves are nodes with no ``downstream`` entries; their ``name``
-    attribute is usually ``"table.column"``. When ``alias_to_table`` is
-    provided, table aliases are translated back to underlying table
-    names so the result references real upstream nodes."""
+    attribute is usually ``"table.column"`` (or ``'"table"."column"'``
+    after qualification). When ``alias_to_table`` is provided, table
+    aliases are translated back to underlying table names so the
+    result references real upstream nodes."""
     alias_to_table = alias_to_table or {}
     leaves: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
+
+    def _unquote(s: str) -> str:
+        # Qualified names come wrapped in double quotes (and sometimes
+        # backticks for other dialects). Strip them so identifier
+        # matching works against the upstream-schemas dict.
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'", "`"):
+            return s[1:-1]
+        return s
 
     def visit(n) -> None:
         if not n.downstream:
             name = getattr(n, "name", "") or ""
             if "." in name:
-                parts = name.split(".")
+                # Handles `t.c`, `"t"."c"`, `schema.t.c`. Split on dots,
+                # then strip quoting on each part. The last two parts
+                # are the table-or-alias and the column name.
+                parts = [p for p in name.split(".") if p]
                 if len(parts) >= 2:
-                    table_or_alias = parts[-2]
-                    column = parts[-1]
-                    real_table = alias_to_table.get(table_or_alias, table_or_alias)
+                    table_or_alias = _unquote(parts[-2])
+                    column = _unquote(parts[-1])
+                    real_table = alias_to_table.get(
+                        table_or_alias, table_or_alias
+                    )
                     ref = (real_table, column)
                     if ref not in seen:
                         seen.add(ref)
