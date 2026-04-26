@@ -41,26 +41,41 @@ them to be enumerated:
 4. **Strict declared schema, with column-lineage synonyms.** A column
    is "available on a parent" if it appears in the `.yml` columns
    block (literal match) OR if the parent exposes a synonymous column
-   under a different name. The synonym index is built from regex-
-   extracted `<src> AS <dst>` aliases in each model's raw SQL plus a
-   passthrough heuristic (same-named column across a parent-child
-   edge); see `dagwright/column_lineage.py`. This handles the
-   canonical staging-rename pattern (`raw_customers.id` →
-   `stg_customers.customer_id` → `customers.customer_id`). What's
-   still invisible:
-   - SQL-only columns the model emits but doesn't `<src> AS <dst>`
-     and doesn't pass through with the same name from a parent
-     (rare in well-documented dbt projects).
-   - Multi-parent JOIN-resolved columns where the same name appears
-     on multiple upstream parents and the SQL picks one. The
-     passthrough heuristic over-unions in this case (treats them as
-     all the same data); usually correct but a documented risk.
-   - Columns wrapped in dbt macros (`{{ cents_to_dollars('subtotal') }}
-     AS subtotal`). The dst name is captured but the upstream column
-     reference is opaque to the regex.
-   - Window functions, aggregates, expression-derived columns.
-   The richer cases (full SQL parsing via sqlglot with schemas)
-   are a v1 widening of this same boundary.
+   under a different name. The synonym index is built from a hybrid
+   extractor in `dagwright/column_lineage.py`:
+   - **Fast path** (single-upstream models with extractable aliases):
+     regex-match `<src> AS <dst>` patterns in the model's raw SQL
+     after Jinja stripping. Covers the canonical staging-rename
+     pattern (`raw_customers.id` → `stg_customers.customer_id` →
+     `customers.customer_id`). ~0.1 ms/model.
+   - **Slow path** (multi-parent JOINs, expression-derived columns,
+     anything regex can't attribute): sqlglot's column-lineage
+     walker with upstream schemas fed in. Resolves
+     `customers.id AS cust_id` vs `orders.id AS order_id` when both
+     parents expose `id`. Translates table aliases (`FROM customers
+     AS c` → `c.id`) back to underlying table names. ~30–100 ms/
+     model on real-world SQL.
+   - **Passthrough heuristic**: same-named column across a
+     parent-child edge is unioned into the same component. Catches
+     downstream marts that select a column without aliasing.
+   What's still invisible:
+   - dbt-macro arguments (`{{ cents_to_dollars('subtotal') }} AS
+     subtotal`) — Jinja stripping replaces the macro with a
+     placeholder so neither extractor can see the underlying column
+     reference. Documented limitation.
+   - Output columns the model emits but never names in `<src> AS
+     <dst>` and that aren't documented in `.yml` either. The hybrid
+     extractor never asks sqlglot about them; regex also can't
+     surface them.
+   - Columns flowing through SOURCE-layer tables that have no
+     documented schema in the manifest (the dominant pattern in
+     test fixtures). sqlglot stops at `<source>.*`; the regex
+     fallback recovers the dominant rename pattern but misses
+     anything more elaborate at the source boundary.
+   - Cost: full lineage build on Mattermost (302 models, 6 MB
+     manifest) takes ~5–6 s vs ~70 ms for the previous regex-only
+     extractor. Acceptable for CLI use; watch mode reloads only on
+     spec changes so the cost is paid once per session.
 5. **Date detection by heuristic.** A column is "date-like" iff:
    one of `{date, time, timestamp, datetime}` appears as a whole
    `_`-delimited token in its name (so `event_time` matches but

@@ -23,7 +23,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from dagwright.column_lineage import attribute_aliases, extract_aliases
+from dagwright.column_lineage import (
+    attribute_aliases,
+    extract_aliases,
+    extract_lineage,
+    extract_lineage_sqlglot,
+)
 from dagwright.loaders import load_consumer_graph, load_manifest, load_spec
 from dagwright.planner import plan_metric_request
 
@@ -174,6 +179,79 @@ consumer:
     )
 
 
+def test_sqlglot_resolves_multi_parent_join() -> None:
+    print("\n[5] sqlglot resolves JOIN-qualified columns the regex can't")
+    # Two upstream parents both expose 'id'; the SELECT explicitly
+    # qualifies which one. Regex would either miss or over-attribute.
+    sql = """
+    SELECT
+        c.id AS customer_id,
+        o.id AS order_id,
+        c.name AS customer_name
+    FROM customers AS c
+    JOIN orders AS o ON o.customer_id = c.id
+    """
+    upstream_schemas = {
+        "customers": ["id", "name"],
+        "orders": ["id", "customer_id", "amount"],
+    }
+    sg = extract_lineage_sqlglot(
+        sql, ["customer_id", "order_id", "customer_name"], upstream_schemas
+    )
+    _check(
+        sg.get("customer_id") == [("customers", "id")],
+        f"customer_id resolved to (customers, id): got {sg.get('customer_id')}",
+    )
+    _check(
+        sg.get("order_id") == [("orders", "id")],
+        f"order_id resolved to (orders, id): got {sg.get('order_id')}",
+    )
+    _check(
+        sg.get("customer_name") == [("customers", "name")],
+        f"customer_name resolved to (customers, name): got {sg.get('customer_name')}",
+    )
+
+    # Regex on the same SQL should NOT successfully attribute (multi-source)
+    # — confirms the JOIN case is sqlglot-only territory.
+    aliases = extract_aliases(sql)
+    rg = attribute_aliases(aliases, list(upstream_schemas.keys()))
+    _check(
+        rg == {},
+        f"regex correctly bails on multi-parent JOIN: got {rg}",
+    )
+
+    # The hybrid extractor should pick sqlglot's answers.
+    hybrid = extract_lineage(
+        sql, ["customer_id", "order_id", "customer_name"], upstream_schemas
+    )
+    _check(
+        hybrid.get("customer_id") == [("customers", "id")],
+        f"hybrid prefers sqlglot for customer_id: got {hybrid.get('customer_id')}",
+    )
+
+
+def test_sqlglot_falls_back_to_regex_when_unhelpful() -> None:
+    print("\n[6] hybrid falls back to regex when sqlglot returns '*' (no source schema)")
+    # Single-parent SELECT * pattern with NO documented schema for the
+    # upstream — sqlglot will resolve to ('raw_customers', '*') which is
+    # not useful, so the hybrid should fall back to the regex's specific
+    # `id AS customer_id` capture.
+    sql = """with source as (select * from raw_customers),
+renamed as (select id as customer_id, name as customer_name from source)
+select * from renamed"""
+    upstream_schemas: dict[str, list[str]] = {"raw_customers": []}  # source not documented
+
+    hybrid = extract_lineage(sql, ["customer_id", "customer_name"], upstream_schemas)
+    _check(
+        hybrid.get("customer_id") == [("raw_customers", "id")],
+        f"hybrid falls back to regex for customer_id: got {hybrid.get('customer_id')}",
+    )
+    _check(
+        hybrid.get("customer_name") == [("raw_customers", "name")],
+        f"hybrid falls back to regex for customer_name: got {hybrid.get('customer_name')}",
+    )
+
+
 def main() -> int:
     print("=" * 78)
     print("Column-lineage smoke test")
@@ -183,6 +261,8 @@ def main() -> int:
     test_extract_aliases_no_false_positives()
     test_synonym_index_jaffle_shop_modern()
     test_planner_accepts_alias_match()
+    test_sqlglot_resolves_multi_parent_join()
+    test_sqlglot_falls_back_to_regex_when_unhelpful()
 
     print()
     print("=" * 78)

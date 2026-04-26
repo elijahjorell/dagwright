@@ -8,6 +8,11 @@ dependencies = [
     "pyyaml>=6.0",
     "watchfiles>=0.21",
     "mcp[cli]>=1.0",
+    # SQL parser for column-level lineage. Used by
+    # dagwright/column_lineage.py to resolve JOIN-qualified columns,
+    # SELECT * propagation through CTEs, and expression-derived columns
+    # that the regex fallback can't handle. See PLANNER_NOTES.md #4.
+    "sqlglot>=27.0",
 ]
 
 [project.optional-dependencies]

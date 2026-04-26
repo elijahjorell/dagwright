@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from dagwright.column_lineage import attribute_aliases, extract_aliases
+from dagwright.column_lineage import extract_lineage
 from dagwright.state import (
     Artifact,
     Consumer,
@@ -74,20 +74,6 @@ def load_manifest(path: Path) -> DagState:
         grain = tuple(unique_columns.get(key, []))
         materialization = (n.get("config") or {}).get("materialized") or rt
 
-        # Per-output-column upstream refs from raw SQL aliases. Only
-        # attributable when the model has exactly one upstream model or
-        # source; multi-source attribution requires a real SQL parser
-        # and is left empty (literal name matching takes over).
-        depends_on_keys = (n.get("depends_on") or {}).get("nodes", [])
-        upstream_names = [
-            _key_to_name(k) for k in depends_on_keys
-            if k.startswith(("model.", "source.", "seed."))
-        ]
-        upstream_names = [u for u in upstream_names if u]
-        raw_code = n.get("compiled_code") or n.get("raw_code") or ""
-        aliases = extract_aliases(raw_code)
-        column_lineage = attribute_aliases(aliases, upstream_names)
-
         nodes[name] = Node(
             name=name,
             layer=layer,
@@ -95,8 +81,8 @@ def load_manifest(path: Path) -> DagState:
             schema=schema,
             materialization=materialization,
             column_descriptions=descs,
-            column_lineage=column_lineage,
         )
+        depends_on_keys = (n.get("depends_on") or {}).get("nodes", [])
         for parent_key in depends_on_keys:
             parent_name = _key_to_name(parent_key)
             if parent_name:
@@ -111,6 +97,33 @@ def load_manifest(path: Path) -> DagState:
             grain=(),
             schema=tuple(s.get("columns", {}).keys()),
             materialization="source",
+        )
+
+    # Second pass: extract column-level lineage. Runs after all nodes
+    # exist so each model can be told its upstream models' schemas
+    # (sqlglot needs them to resolve JOIN-qualified columns and SELECT *
+    # propagation). Sources and seeds have no SQL so nothing to extract.
+    for key, n in raw_nodes.items():
+        if n.get("resource_type") not in {"model", "seed"}:
+            continue
+        name = n["name"]
+        if name not in nodes:
+            continue
+        raw_code = n.get("compiled_code") or n.get("raw_code") or ""
+        if not raw_code:
+            continue
+        output_columns = list((n.get("columns") or {}).keys())
+        upstream_names = [
+            _key_to_name(k)
+            for k in (n.get("depends_on") or {}).get("nodes", [])
+            if k.startswith(("model.", "source.", "seed."))
+        ]
+        upstream_schemas = {
+            upn: list(nodes[upn].schema) if upn in nodes else []
+            for upn in upstream_names if upn
+        }
+        nodes[name].column_lineage = extract_lineage(
+            raw_code, output_columns, upstream_schemas
         )
 
     column_synonyms = _build_column_synonyms(nodes, edges)

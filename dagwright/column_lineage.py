@@ -142,10 +142,9 @@ def attribute_aliases(
     references.
 
     With a single upstream node, every alias is attributed to it. With
-    multiple upstream nodes, attribution is ambiguous and we conservatively
-    skip it (the column is omitted from the lineage map, falling back
-    to literal name matching). Resolving multi-source attribution
-    requires a real SQL parser; see module docstring.
+    multiple upstream nodes, attribution is ambiguous via regex alone
+    and we conservatively skip it; the sqlglot path resolves the
+    JOIN-qualified case.
     """
     if not aliases or not upstream_node_names:
         return {}
@@ -155,4 +154,165 @@ def attribute_aliases(
     out: dict[str, list[tuple[str, str]]] = {}
     for src, dst in aliases:
         out.setdefault(dst, []).append((upstream, src))
+    return out
+
+
+def extract_lineage_sqlglot(
+    raw_code: str,
+    output_columns: list[str],
+    upstream_schemas: dict[str, list[str]],
+    dialect: str = "duckdb",
+) -> dict[str, list[tuple[str, str]]]:
+    """Use sqlglot's column-lineage walker to map each output column to
+    its upstream source columns. Resolves JOIN-qualified columns,
+    SELECT-* propagation through CTEs (when source schemas are known),
+    and expression-derived columns the regex can't see.
+
+    Returns ``{}`` when sqlglot can't parse the SQL or the requested
+    output column doesn't appear in it. Per-column failures are silently
+    skipped; the caller can fall back to regex for those.
+
+    ``upstream_schemas`` maps node name to the list of column names that
+    node exposes. Pass ``[]`` for nodes whose columns aren't documented
+    — sqlglot will fail to resolve ``*`` from them but other columns
+    may still resolve fine.
+    """
+    if not raw_code or not output_columns:
+        return {}
+    try:
+        import sqlglot
+        from sqlglot import exp as _sg_exp
+        from sqlglot import lineage as _sg_lineage
+        from sqlglot.errors import SqlglotError
+    except ImportError:
+        return {}
+
+    sql = strip_comments(strip_jinja(raw_code))
+    schema: dict[str, dict[str, str]] = {
+        node: {col: "UNKNOWN" for col in cols}
+        for node, cols in upstream_schemas.items()
+    }
+
+    # sqlglot's lineage walker returns table-alias-qualified leaves
+    # (``c.id`` for ``FROM customers AS c``). Build a map from each
+    # alias to the underlying table name so we can translate leaves
+    # back to real names.
+    alias_to_table: dict[str, str] = {}
+    try:
+        parsed = sqlglot.parse_one(sql, dialect=dialect)
+        for tbl in parsed.find_all(_sg_exp.Table):
+            tbl_name = tbl.name
+            tbl_alias = tbl.alias
+            if tbl_alias and tbl_alias != tbl_name:
+                alias_to_table[tbl_alias] = tbl_name
+    except (SqlglotError, AttributeError, ValueError):
+        pass
+
+    out: dict[str, list[tuple[str, str]]] = {}
+    for col in output_columns:
+        try:
+            root = _sg_lineage.lineage(col, sql, schema=schema, dialect=dialect)
+        except (SqlglotError, KeyError, AttributeError, RecursionError, ValueError):
+            continue
+        leaves = _walk_to_leaves(root, alias_to_table)
+        # Filter to (node, col) pairs where the node is a known upstream
+        # AND the column is specific (not `*`). Sources without
+        # documented schemas leave sqlglot stuck at `*`; the caller's
+        # regex fallback handles those.
+        filtered = [
+            (n, c) for n, c in leaves
+            if n in upstream_schemas and c != "*"
+        ]
+        if filtered:
+            out[col] = filtered
+    return out
+
+
+def _walk_to_leaves(
+    node,
+    alias_to_table: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Collect (table, column) leaves from a sqlglot lineage tree.
+    Leaves are nodes with no ``downstream`` entries; their ``name``
+    attribute is usually ``"table.column"``. When ``alias_to_table`` is
+    provided, table aliases are translated back to underlying table
+    names so the result references real upstream nodes."""
+    alias_to_table = alias_to_table or {}
+    leaves: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def visit(n) -> None:
+        if not n.downstream:
+            name = getattr(n, "name", "") or ""
+            if "." in name:
+                parts = name.split(".")
+                if len(parts) >= 2:
+                    table_or_alias = parts[-2]
+                    column = parts[-1]
+                    real_table = alias_to_table.get(table_or_alias, table_or_alias)
+                    ref = (real_table, column)
+                    if ref not in seen:
+                        seen.add(ref)
+                        leaves.append(ref)
+            return
+        for d in n.downstream:
+            visit(d)
+
+    visit(node)
+    return leaves
+
+
+def extract_lineage(
+    raw_code: str,
+    output_columns: list[str],
+    upstream_schemas: dict[str, list[str]],
+) -> dict[str, list[tuple[str, str]]]:
+    """Hybrid extractor: cheap regex path first, sqlglot only when the
+    regex can't help.
+
+    Per-output-column logic:
+    - **Fast path** — single upstream and regex captures something:
+      use regex only. Covers the dominant staging-rename pattern and
+      keeps load time fast on real-world manifests with hundreds of
+      models. sqlglot parsing is ~60 ms/model and adds up; we avoid
+      it when the regex result is already enough.
+    - **Slow path** — multiple upstreams (JOIN attribution needed) or
+      no regex match at all (likely an expression-derived column):
+      run sqlglot, fall back to regex for any column it can't resolve.
+    - Otherwise the column is absent and the planner falls back to
+      literal name matching.
+    """
+    upstream_names = list(upstream_schemas.keys())
+    regex_aliases = extract_aliases(raw_code) if raw_code else []
+    rg = attribute_aliases(regex_aliases, upstream_names)
+
+    # Fast path: a single upstream node with at least one regex alias
+    # match means the staging-rename pattern. sqlglot would give the
+    # same answer at ~60 ms per model — skip it.
+    if len(upstream_names) <= 1 and rg:
+        return dict(rg)
+
+    # Also skip sqlglot when there's a single upstream and it has no
+    # documented schema. sqlglot can only resolve specific columns when
+    # source schemas are known; with `select * from <undocumented>` it
+    # stops at the table's `*` leaf which we filter out anyway.
+    if (
+        len(upstream_names) == 1
+        and not upstream_schemas.get(upstream_names[0])
+    ):
+        return dict(rg)
+
+    sg = extract_lineage_sqlglot(raw_code, output_columns, upstream_schemas)
+
+    out: dict[str, list[tuple[str, str]]] = {}
+    for col in output_columns:
+        if col in sg:
+            out[col] = sg[col]
+        elif col in rg:
+            out[col] = rg[col]
+    # Also include regex-only columns the caller didn't list explicitly
+    # (e.g., undocumented intermediate columns).
+    for col, refs in rg.items():
+        if col not in out:
+            out[col] = refs
     return out
