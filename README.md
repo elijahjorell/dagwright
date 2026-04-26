@@ -115,6 +115,23 @@ across runs given identical inputs.
 
 See `specs/schema.md` for the spec shape.
 
+### Watch mode (the iteration-loop UX)
+
+```bash
+uv run dagwright watch \
+  --spec tests/jaffle_shop_modern/specs/lifetime_spend_pretax.yaml \
+  --manifest tests/jaffle_shop_modern/manifest.json \
+  --bi tests/jaffle_shop_modern/metabase.json \
+  --top 2
+```
+
+Re-runs the plan whenever the spec, manifest, or BI graph changes on
+disk. Open the spec in your editor in one pane, run watch in another
+— save = new plans appear in milliseconds. This is the operational
+form of the iteration-during-plan-shaping use case the project is
+built around. Invalid YAML mid-edit is caught and reported without
+crashing the watcher; `Ctrl+C` exits cleanly.
+
 ## Structure
 
 - `dagwright/` — the planner package (Python).

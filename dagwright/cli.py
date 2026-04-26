@@ -22,11 +22,28 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--format", choices=["json", "markdown", "both"], default="both", help="Output format.")
     plan.add_argument("--top", type=int, default=3, help="Number of top-ranked plans to emit.")
 
+    watch = sub.add_parser(
+        "watch",
+        help="Re-run plan whenever the spec, manifest, or BI graph changes.",
+    )
+    watch.add_argument("--spec", type=Path, required=True, help="Path to dagwright-spec YAML.")
+    watch.add_argument("--manifest", type=Path, required=True, help="Path to dbt manifest.json.")
+    watch.add_argument("--bi", type=Path, default=None, help="Path to BI consumer graph JSON.")
+    watch.add_argument(
+        "--format", choices=["json", "markdown", "both"], default="markdown",
+        help="Output format. Defaults to markdown for live readability.",
+    )
+    watch.add_argument("--top", type=int, default=3, help="Number of top-ranked plans to emit.")
+
     args = parser.parse_args(argv)
 
     if args.command == "plan":
         from dagwright.planner import plan_command
         return plan_command(args)
+
+    if args.command == "watch":
+        from dagwright.watch import watch_command
+        return watch_command(args)
 
     return 1
 

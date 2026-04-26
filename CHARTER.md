@@ -75,7 +75,10 @@ AE+LLM plan-shaping. The headline benefit is per-AE and every-use:
   fast feedback during plan-shaping changes how AEs make
   architectural decisions.** All the properties above (deterministic,
   structured, fast, free) exist to enable this loop. Everything else
-  is downstream.
+  is downstream. Operational form: `dagwright watch` re-runs the
+  planner on every save of the spec / manifest / BI graph, so the
+  iteration loop becomes "save → see plans" with no command in
+  between.
 
 The same speed and cost properties have institutional follow-on
 benefits at team / org scale, useful but secondary to the per-AE
