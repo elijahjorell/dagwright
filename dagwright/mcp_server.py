@@ -143,6 +143,73 @@ def plan(
 
 
 @mcp.tool()
+def summarize_manifest(manifest_path: str) -> dict:
+    """Compact summary of a dbt manifest — lets Claude orient in a
+    new project without ingesting the full multi-MB JSON.
+
+    Returns:
+        dbt metadata: schema version, dbt version, project name.
+        models_by_layer: count per (SOURCE|STAGING|INTERMEDIATE|MART).
+        total_nodes / total_edges: structural size.
+        marts: list of {name, schema_column_count, grain, materialization}.
+        exposures: list of {name, type, owner, depends_on (model
+            names only)} for in-tree dbt exposures (the BI graph).
+    """
+    _maybe_reload()
+    import json
+    from collections import Counter
+    from dagwright.loaders import load_manifest
+
+    p = Path(manifest_path)
+    with open(p, encoding="utf-8") as f:
+        raw = json.load(f)
+
+    metadata = raw.get("metadata", {}) or {}
+    dag = load_manifest(p)
+
+    layers = Counter(n.layer for n in dag.nodes.values())
+
+    marts = sorted(
+        [
+            {
+                "name": n.name,
+                "schema_column_count": len(n.schema),
+                "grain": list(n.grain),
+                "materialization": n.materialization,
+            }
+            for n in dag.nodes.values()
+            if n.layer == "MART"
+        ],
+        key=lambda m: m["name"],
+    )
+
+    raw_exposures = raw.get("exposures", {}) or {}
+    exposures = []
+    for exp in raw_exposures.values():
+        deps = (exp.get("depends_on") or {}).get("nodes", []) or []
+        owner = exp.get("owner") or {}
+        exposures.append({
+            "name": exp.get("name"),
+            "type": exp.get("type"),
+            "owner": owner.get("email") or owner.get("name"),
+            "depends_on": [d.split(".")[-1] for d in deps],
+        })
+    exposures.sort(key=lambda e: e["name"] or "")
+
+    return {
+        "dbt_schema_version": metadata.get("dbt_schema_version"),
+        "dbt_version": metadata.get("dbt_version"),
+        "generated_at": metadata.get("generated_at"),
+        "project_name": metadata.get("project_name"),
+        "models_by_layer": dict(layers),
+        "total_nodes": len(dag.nodes),
+        "total_edges": len(dag.edges),
+        "marts": marts,
+        "exposures": exposures,
+    }
+
+
+@mcp.tool()
 def discover_specs(root_path: str) -> list[dict]:
     """Find dagwright specs under `root_path`. Walks the directory
     tree, looks at every .yaml / .yml file, returns those that have

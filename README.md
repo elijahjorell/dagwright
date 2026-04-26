@@ -155,7 +155,7 @@ Add to your Claude Code MCP config (typically
 }
 ```
 
-The server exposes three tools:
+The server exposes four tools:
 
 - **`plan(spec_path, manifest_path, bi_path?, top?)`** — the main
   one. Returns serialized spec, ranked plans, rejections, and (on
@@ -168,6 +168,11 @@ The server exposes three tools:
 - **`discover_specs(root_path)`** — walks a directory, returns
   spec paths grouped by kind and id. Lets the LLM find specs
   without the AE having to recite paths.
+- **`summarize_manifest(manifest_path)`** — compact summary of a dbt
+  manifest (project name, dbt version, models by layer, marts list,
+  exposures). Lets the LLM orient in a new project without ingesting
+  the full multi-MB JSON. ~12 KB summary vs ~6 MB raw manifest on
+  the Mattermost fixture.
 
 The CLI commands below remain available for power users, CI, and
 debugging — but the MCP server is the headline integration.
