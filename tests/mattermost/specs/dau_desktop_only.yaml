@@ -26,5 +26,4 @@ new_definition:
 migration:
   must_migrate:
     - customer_journey_and_new_logo_exposure
-    - product_pulse
   allow_stale_consumers: false
