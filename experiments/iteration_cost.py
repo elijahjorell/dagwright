@@ -203,6 +203,7 @@ class IterationResult:
     dagwright_wall_ms: float
     total_wall_ms: float
     notes: str = ""
+    retried: bool = False  # treatment only: did this iter need a validate-and-retry?
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +336,29 @@ TREATMENT_REFINEMENT = """Edit the following dagwright spec to apply this refine
 ## Your task
 
 Produce the updated YAML spec. Make the smallest edit consistent with the refinement; do not rewrite fields that don't need to change. Output the updated YAML only, wrapped in a fenced ```yaml block."""
+
+
+TREATMENT_RETRY = """Your previous YAML failed dagwright's schema validation. Fix the YAML and resubmit.
+
+## Schema reference (the canonical spec shape)
+
+```json
+{schema}
+```
+
+## Your prior attempt
+
+```yaml
+{prior_yaml}
+```
+
+## Validation error
+
+{error}
+
+## Your task
+
+Produce a corrected YAML spec that fixes the validation error. Only output the YAML, wrapped in a fenced ```yaml block. Do not change anything that wasn't required by the error."""
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +512,11 @@ def run_treatment(task: Task, llm: LLMClient) -> tuple[list[IterationResult], st
         notes=err,
     ))
 
-    # Iterations 1..N: refinements
+    # Iterations 1..N: refinements. On a SpecError, give the LLM one
+    # chance to repair the YAML — the production MCP loop has this
+    # retry path too (validate_spec is exposed for exactly this).
+    # Without retry, a single LLM mistake freezes treatment at iter N
+    # and downstream comparisons are meaningless.
     for i, refinement in enumerate(task.refinements, start=1):
         current_spec = spec_path.read_text(encoding="utf-8")
         prompt = TREATMENT_REFINEMENT.format(
@@ -500,11 +528,32 @@ def run_treatment(task: Task, llm: LLMClient) -> tuple[list[IterationResult], st
         yaml_str = extract_yaml(text)
         spec_path.write_text(yaml_str, encoding="utf-8")
         dw_ms, err = run_dagwright_plan(spec_path, task.manifest_path, task.bi_path)
+
+        retried = False
+        if err and "SpecError" in err:
+            retried = True
+            retry_prompt = TREATMENT_RETRY.format(
+                schema=schema_str, prior_yaml=yaml_str, error=err
+            )
+            r_text, r_in, r_out, r_ms = llm.call(
+                [{"role": "user", "content": retry_prompt}], max_tokens=2000
+            )
+            yaml_str = extract_yaml(r_text)
+            spec_path.write_text(yaml_str, encoding="utf-8")
+            dw_ms2, err2 = run_dagwright_plan(
+                spec_path, task.manifest_path, task.bi_path
+            )
+            in_tok += r_in
+            out_tok += r_out
+            llm_ms += r_ms
+            dw_ms += dw_ms2
+            err = err2  # final state after retry
+
         results.append(IterationResult(
             task_id=task.id, agent_kind="treatment", iteration=i, refinement=refinement,
             llm_input_tokens=in_tok, llm_output_tokens=out_tok,
             llm_wall_ms=llm_ms, dagwright_wall_ms=dw_ms, total_wall_ms=llm_ms + dw_ms,
-            notes=err,
+            notes=err, retried=retried,
         ))
 
     final_spec_yaml = spec_path.read_text(encoding="utf-8")
@@ -527,14 +576,14 @@ def write_csv(results: list[IterationResult], out_path: Path) -> None:
             "task_id", "agent_kind", "iteration", "refinement",
             "llm_input_tokens", "llm_output_tokens",
             "llm_wall_ms", "dagwright_wall_ms", "total_wall_ms",
-            "notes",
+            "notes", "retried",
         ])
         for r in results:
             writer.writerow([
                 r.task_id, r.agent_kind, r.iteration, r.refinement or "",
                 r.llm_input_tokens, r.llm_output_tokens,
                 f"{r.llm_wall_ms:.1f}", f"{r.dagwright_wall_ms:.1f}",
-                f"{r.total_wall_ms:.1f}", r.notes,
+                f"{r.total_wall_ms:.1f}", r.notes, "1" if r.retried else "0",
             ])
 
 
@@ -685,8 +734,9 @@ def main(argv: list[str] | None = None) -> int:
             all_results.extend(results)
             for r in results:
                 note = f"  [!] {r.notes}" if r.notes else ""
+                retried = " [retry]" if r.retried else ""
                 print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / "
-                      f"llm {r.llm_wall_ms:>6.0f} ms / dw {r.dagwright_wall_ms:>5.0f} ms{note}")
+                      f"llm {r.llm_wall_ms:>6.0f} ms / dw {r.dagwright_wall_ms:>5.0f} ms{retried}{note}")
             if args.save_plans:
                 p_md = args.save_plans / f"{task.id}__treatment.md"
                 p_md.write_text(final_plan_markdown, encoding="utf-8")
