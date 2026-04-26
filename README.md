@@ -1,18 +1,28 @@
 # dagwright
 
-A **fast feedback loop** for AE+LLM architectural change planning.
-Splits the work right: the LLM does small targeted spec edits (cheap,
-what it's good at); dagwright does the deterministic plan enumeration
-(free, what *it's* good at). End-to-end iteration drops from
-~30–150 s + ~38K tokens per LLM round-trip to ~5–15 s + ~5–10K tokens
-(LLM edit time only), with the dagwright step adding ~20 ms + 0
-tokens per re-plan. AEs can afford 5–10 iterations in the time and
-cost of one full prose-plan regeneration.
+A **deterministic compiler** in the AE+LLM stack for architectural
+change planning. The AE writes and reads at the human-friendly ends;
+the spec is machine-readable intermediate representation in the
+middle:
 
-dagwright doesn't replace your LLM. It's the deterministic, structured,
-free artifact layer your LLM workflows don't have today — the surface
-your LLM edits against, instead of regenerating planning prose
-end-to-end.
+```
+AE writes NL  →  LLM edits spec (IR)  →  dagwright compiles → plan  →  AE reads plan
+   ~instant         ~5–15 s, ~5–10K tokens     ~20 ms, 0 tokens         ~instant
+```
+
+The AE iterates on plans, not on YAML. Each round-trip is dominated
+by the LLM edit (still small and targeted); dagwright's contribution
+is deterministic, near-free, reproducible plan generation. End-to-end
+per iteration: ~5–15 s + ~5–10K tokens, vs ~30–150 s + ~38K tokens
+for the LLM-only equivalent (regenerating a full prose plan from
+scratch each iteration). AEs can afford 5–10 iterations in the time
+and cost of one full prose-plan regeneration.
+
+dagwright doesn't replace your LLM. It's the missing compile step
+between LLM and human in your AE workflow — the layer that turns
+LLM-edited specs into deterministic, structured, reproducible plan
+artifacts so the AE can iterate on outputs without re-running plan
+reasoning through the LLM each time.
 
 ## Receipts
 
@@ -39,15 +49,14 @@ and the iteration is cheap enough that AEs actually iterate.
 
 - **Plan iteration during development — the headline.** The cost of
   trying a plan variation drops by roughly an order of magnitude vs.
-  full prose-plan regeneration. AEs stop committing to the first
-  plausible plan and start exploring: *what if must_migrate excluded
-  one consumer? what if I split this into two specs? what if the
-  new_definition pointed at a different column?* The LLM does the
-  small spec edit (5–15 s, a few thousand tokens), dagwright does
-  the deterministic re-plan in milliseconds, the AE reads the new
-  plan. **Affordable iteration during plan-shaping changes how AEs
-  make architectural decisions.** Everything below is a downstream
-  consequence of the same property.
+  full prose-plan regeneration. The AE describes a variation in NL
+  ("exclude one consumer," "split into two specs," "point the
+  new_definition at a different column"); the LLM edits the spec
+  IR; dagwright compiles to a new ranked plan; the AE reads the
+  plan. The AE never touches YAML during the inner loop. **Affordable
+  iteration during plan-shaping changes how AEs make architectural
+  decisions.** Everything below is a downstream consequence of the
+  same compile step.
 - **CI gates.** `dagwright check` on every PR to verify a spec
   satisfies declared contracts. Sub-second; zero token cost.
 - **Bulk planning.** Generate plans across many specs (parameter

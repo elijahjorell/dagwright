@@ -29,24 +29,40 @@ rather than **committing** to the first plausible candidate.
 
 ## How the workflow actually runs
 
-In practice the AE doesn't hand-edit YAML. The typical loop is:
+dagwright is structured like a compiler in the AE+LLM stack. The AE
+writes and reads at the human-friendly ends; the spec is machine-
+readable intermediate representation in the middle:
 
-1. AE describes the change or a variation in natural language to
-   their LLM tool ("exclude product_pulse from must_migrate").
-2. LLM edits the spec file and saves.
-3. dagwright (in watch mode) detects the save and re-runs the
-   planner in milliseconds.
-4. AE reads the new ranked plans.
+1. **AE writes** natural language to their LLM tool ("exclude
+   product_pulse from must_migrate").
+2. **LLM edits** the spec file (the IR) and saves.
+3. **dagwright compiles** spec → ranked plans (deterministic,
+   ~20ms, 0 tokens per re-plan; in watch mode this fires
+   automatically on save).
+4. **AE reads** the new ranked plans.
 5. AE describes the next variation. Loop.
 
-**The bottleneck per iteration is the LLM edit (~5–15s, ~5–10K
-tokens), not dagwright (~20ms, 0 tokens).** The headline value isn't
-"1000× faster" — it's the split of labor: small targeted edits cost
-a fraction of full prose-plan regeneration (~30–150s, ~38K tokens
-for a from-scratch plan), and the planning step that would otherwise
-also run through the LLM is offloaded to a deterministic, reproducible
-engine. The AE can afford 5–10 iterations in the time/cost of one
-end-to-end LLM round-trip.
+**The AE consumes the plan, not the spec.** During the inner loop
+they don't read YAML — they trust the LLM edit, see the resulting
+plan, and react. The spec persists in git for commit-time and
+post-mortem review, but during iteration nobody human looks at it.
+
+**Bottleneck per iteration is the LLM edit (~5–15s, ~5–10K tokens),
+not dagwright (~20ms, 0 tokens).** The headline value isn't "1000×
+faster" — it's the split of labor: small targeted edits cost a
+fraction of full prose-plan regeneration (~30–150s, ~38K tokens for
+a from-scratch plan), and the planning step that would otherwise
+also run through the LLM is offloaded to a deterministic,
+reproducible engine. The AE can afford 5–10 iterations in the
+time/cost of one end-to-end LLM round-trip.
+
+**Design implication for the spec format.** Because the spec is IR
+during iteration, it should be optimized for LLM-edit reliability
+and dagwright-parsing rather than AE readability during the inner
+loop. Human-readable fields (verbose `intent` prose, descriptive
+`basis` labels, etc.) retain value at commit/review time when a
+human does read the spec in a git diff — but they're not what the
+AE sees during plan-shaping.
 
 ## What dagwright is *not*
 

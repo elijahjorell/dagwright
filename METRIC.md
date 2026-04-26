@@ -70,17 +70,18 @@ the highest scope reached and how often.
 The artifact-property pivot reshapes what to track alongside the
 primary metric:
 
-- **Iteration loops per AE session.** How many spec variations does
-  an AE try before settling on the plan they execute? "Iteration"
-  here means a full round-trip — the AE describes a variation, the
-  LLM edits the spec, dagwright re-plans, the AE reads the result.
-  Each round-trip is ~5–15 s + ~5–10K tokens (the LLM edit is the
-  bottleneck; dagwright is ~20 ms + 0 tokens within it). If this
-  count is consistently 1, the iteration story isn't landing —
-  they're still committing to the first plan, and the cost
-  advantage isn't translating into changed behavior. Higher numbers
-  mean the workflow shift the project is selling is actually
-  happening. Hard to measure without telemetry; worth at least
+- **Iteration loops per AE session.** How many plan variations does
+  an AE consume before settling on the one they execute? An
+  "iteration" is a full NL → plan round-trip: the AE describes a
+  variation in NL, the LLM edits the spec (IR), dagwright compiles
+  to a new plan, the AE reads it. The AE doesn't touch YAML during
+  the inner loop. Each round-trip is ~5–15 s + ~5–10K tokens (the
+  LLM edit is the bottleneck; dagwright is ~20 ms + 0 tokens within
+  it). If this count is consistently 1, the iteration story isn't
+  landing — they're still committing to the first plan, and the
+  cost advantage isn't translating into changed behavior. Higher
+  numbers mean the workflow shift the project is selling is
+  actually happening. Hard to measure without telemetry; worth
   tracking informally during dogfooding.
 - **Latency.** Time from CLI invocation to JSON/markdown output.
   Must stay sub-second for typical manifests. Floor: ~milliseconds.
