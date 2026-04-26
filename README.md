@@ -26,16 +26,25 @@ reasoning through the LLM each time.
 
 ## Receipts
 
-Per-iteration cost comparison. The "iteration" granularity matters:
+Per-iteration cost comparison. The "iteration" granularity matters.
+First two rows are measured (Experiment B, Sonnet 4.6, N=1 task,
+6 iterations); see `experiments/README.md` for run conditions and
+`experiments/results/iteration_cost.csv` for the per-iteration data.
 
 | | dagwright + LLM-edits-spec | LLM-only (prose plan, regenerated) |
 |---|---|---|
-| Time per iteration | ~5–15 s (LLM edit + ~20 ms dagwright) | ~30–150 s |
-| Tokens per iteration | ~5–10K (small targeted edit) | ~38K (full plan) |
+| Time per iteration (avg over 6) | 3.6 s | 76 s — and growing (40 s on iter 0 → 120 s on iter 5) |
+| Tokens per iteration (avg over 6) | ~1,000 | ~13,400 — growing 2,800 → 26,200 with history |
 | Same input → same output | yes (dagwright is deterministic) | no |
 | Output as data (diff-able, queryable) | yes | no |
 | Plan content quality | not yet rigorously tested | not yet rigorously tested (one informal task: LLM-only richer first plan) |
 | SQL / data / decision equivalence | untested | untested |
+
+Headline from the same run: **12.8× total token ratio, 21.1×
+total wall-clock ratio across 6 iterations on a single task.** The
+gap widens with iteration count because the control re-feeds full
+conversation history each turn while the treatment sends only the
+current spec + the refinement.
 
 **Notes on the comparison.** The dagwright step itself is ~20 ms and
 0 tokens; the iteration cost above is the end-to-end loop including

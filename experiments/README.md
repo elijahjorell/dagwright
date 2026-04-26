@@ -75,6 +75,70 @@ If the thesis holds, the CSV should show:
 - Wall-clock dominated by LLM calls in both agents; dagwright
   compile is ~5–30 ms regardless.
 
+#### Today's data
+
+First real run, 2026-04-26, `claude-sonnet-4-6`, task
+`new_customers_monthly` (jaffle_shop_modern), 6 iterations per
+agent. CSV: `experiments/results/iteration_cost.csv`.
+
+| | control (LLM-only) | treatment (dagwright) | ratio |
+|---|---|---|---|
+| Total tokens (6 iters) | 80,275 (55,145 in / 25,130 out) | 6,275 (4,413 in / 1,862 out) | **12.8×** |
+| Total wall-clock | 455.5 s | 21.6 s | **21.1×** |
+| Iter 5 input tokens | 19,995 | 424 | **47×** |
+| Iter 5 wall-clock | 119.7 s | 3.0 s | **40×** |
+| Spend at Sonnet 4.6 rates | ~$0.54 | ~$0.04 | 13.2× |
+
+Per-iteration shape matched the thesis exactly:
+
+- **Control input grows monotonically** (734 → 2,891 → 6,350 →
+  10,429 → 14,746 → 19,995 tokens) as conversation history
+  accumulates. The cost-per-iteration curve is super-linear in
+  iteration count because each turn re-feeds all prior turns.
+- **Treatment is flat after iter 0** (~400 input tokens per
+  refinement; iter 0 is heavier at 2,411 because it carries the
+  full spec schema + manifest summary). dagwright's own compile is
+  5–41 ms per iteration.
+- All 6 treatment iterations compiled cleanly through dagwright —
+  the LLM-edited specs were structurally valid every time.
+
+Total run spend: ~$0.58. Total wall-clock: ~8 minutes (single-
+threaded; both agents run sequentially).
+
+The headline ratios (12.8×, 21.1×) are weaker than the absolute
+delta on later iterations (47×, 40× by iter 5) because iter 0 is
+where treatment pays its setup cost. The ratio-vs-iteration-count
+curve only gets steeper as iterations extend — by iter 10 the
+control is sending ~50K input tokens per call and the treatment
+is still at ~400.
+
+#### Methodological note: SDK vs Claude Code orchestration
+
+The harness uses the Anthropic SDK directly (`from anthropic
+import Anthropic`) rather than orchestrating Claude Code subagents
+via `claude -p` or the Agent tool. Honest reasoning:
+
+- **Measurement contamination.** Claude Code wraps every call in
+  its own multi-thousand-token system prompt + tool schemas. The
+  control in B is supposed to be "raw LLM on a planning task" —
+  if it ran through Claude Code, the input-token count would
+  include all that scaffolding and the comparison would no longer
+  isolate dagwright's effect from Claude Code's own framing.
+- **Token accounting.** The SDK returns `response.usage.input_tokens`
+  and `output_tokens` exactly. Headless `claude -p` returns final
+  text only; per-call usage is harder to extract reliably.
+- **Temperature / seed control.** SDK calls pin `temperature=0`
+  directly; subagent orchestration doesn't expose that knob.
+
+A complementary experiment **B′** would orchestrate Claude Code
+subagents (with vs without the dagwright MCP server) and measure
+the same per-iteration cost shape under realistic deployment
+framing. That tests "Claude Code agent + dagwright vs Claude Code
+agent alone" rather than "raw LLM + dagwright vs raw LLM alone."
+Both are valid; B′ is closer to what an investor cares about, but
+its signal is noisier (system prompt drift from Claude Code
+releases will shift absolute numbers). Run B′ if asked.
+
 #### Caveats
 
 - LLM output is non-deterministic at temperature > 0. The harness
@@ -86,6 +150,11 @@ If the thesis holds, the CSV should show:
   coherently.
 - One task is wired today (`new_customers_monthly`). Add more by
   appending entries to the `TASKS` dict in `iteration_cost.py`.
+  Today's headline ratios (12.8×, 21.1×) are N=1; replicate across
+  2–3 more fixtures before treating them as load-bearing.
+- Sonnet 4.6 specifically. Different models will give different
+  absolute numbers; the ratio is what generalises. Re-run on any
+  model that ships and update the receipt.
 - Pricing is not baked in. Sonnet and Opus rates differ ~5×; quote
   the exact rates alongside any cost claim derived from this CSV.
 
@@ -231,7 +300,13 @@ strong receipt — moves outcome equivalence from "anecdotal" to
 ## Future experiments
 
 - **A** — head-to-head with a quality rubric (2–3 days, including
-  rubric design).
+  rubric design). **Unblocked now that B has produced iteration
+  data**; A scores convergence quality across the same iteration
+  count to test whether the cost saving comes at a quality cost.
+- **B′** — same per-iteration measurement, but orchestrated through
+  Claude Code subagents (with vs without the dagwright MCP server)
+  instead of raw SDK calls. Closer to deployment framing; noisier
+  signal. See B's methodological note above.
 - **D** — stability under spec rephrasing (half-day).
 - **F** — manifest drift replay (1–2 days).
 - **G** — AE-in-the-loop user study (post-Aug-31).
