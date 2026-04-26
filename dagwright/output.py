@@ -85,16 +85,56 @@ def _render_plan_md(rank: int, plan: Plan) -> list[str]:
     out.append("")
     blast = plan.blast_radius
     out.append(
-        f"- Existing artifacts whose contracts are at risk: "
-        f"{', '.join(f'`{a}`' for a in blast['existing_artifacts_affected']) or '_(none)_'}"
+        f"- **Existing artifacts whose contracts are at risk**: "
+        f"{', '.join(f'`{a}`' for a in blast['existing_artifacts_affected']) or '_(none)_*' + ' — this plan adds a new node downstream; no parent schema changes.*'}"
     )
-    if blast["parent_consumers_unchanged"]:
+    detail = blast.get("parent_consumers_detail") or []
+    if detail:
+        out.append("- **Parent's existing consumers** (unaffected, with reads):")
+        for d in detail:
+            cols = d.get("columns") or []
+            cols_str = ", ".join(f"`{c}`" for c in cols) if cols else "_(no specific columns recorded)_"
+            out.append(f"  - `{d['artifact']}` reads {cols_str} from `{d['node']}` — {d['status']}")
+    elif blast["parent_consumers_unchanged"]:
         out.append(
-            "- Parent's existing consumers (unchanged by this plan, listed for context): "
+            "- **Parent's existing consumers** (unchanged): "
             + ", ".join(f"`{a}`" for a in blast["parent_consumers_unchanged"])
         )
-    out.append(f"- New artifact this plan binds a contract to: `{blast['new_artifact']}`")
+    out.append(
+        f"- **New artifact**: `{blast['new_artifact']}` — bound to `{plan.new_construction[0]}` via C1 (schema) and C2 (grain) contracts"
+    )
     out.append("")
+
+    # Tier-policy callout for any critical contract on this plan.
+    critical_contracts = [
+        op for op in plan.operations
+        if op.op == "add_contract" and op.args.get("tier") == "critical"
+    ]
+    if critical_contracts:
+        out.append("### Tier policy (critical)")
+        out.append("")
+        out.append(
+            "One or more contracts on this plan are at the **critical** tier. "
+            "The implicit operational policy applies:"
+        )
+        out.append("")
+        out.append(
+            "- **Data tests** required on every contracted column "
+            "(`not_null`, `unique` where applicable, `accepted_values` for enums)."
+        )
+        out.append(
+            "- **Schema changes** to contracted columns require AE + downstream-"
+            "consumer sign-off before merge."
+        )
+        out.append(
+            "- **Breaking changes** (column drop / rename / type change) need a "
+            "deprecation window with explicit comms to every must-migrate consumer."
+        )
+        out.append(
+            "- **Contract failures** should fail dbt runs by default "
+            "(severity: error)."
+        )
+        out.append("")
 
     if plan.risks:
         out.append("### Risks")

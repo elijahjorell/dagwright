@@ -729,11 +729,33 @@ def compute_blast_radius(
     """Adding a new mart downstream of an existing parent does not
     modify the parent's schema. Therefore no existing artifact's
     contract is at risk for this plan shape. The dict still includes
-    the parent's existing consumers as informational context."""
-    parent_consumers = [a.id for a in cg.artifacts_consuming(parent_name)]
+    per-consumer detail (column-level reads) so the renderer can
+    spell out *why* each consumer is unaffected — the AE shouldn't
+    have to verify this themselves."""
+    parent_consumers_detail: list[dict] = []
+    for a in cg.artifacts_consuming(parent_name):
+        cols = tuple(
+            col
+            for c in a.consumes
+            if c.node == parent_name
+            for col in c.columns
+        )
+        parent_consumers_detail.append({
+            "artifact": a.id,
+            "node": parent_name,
+            "columns": list(cols),
+            "status": "unaffected",
+            "reasoning": (
+                f"this plan adds a new MART downstream of `{parent_name}`; "
+                f"reads of {', '.join(f'`{c}`' for c in cols) or '_(no specific columns)_'} "
+                f"from `{parent_name}` are unchanged."
+            ),
+        })
+
     return {
         "existing_artifacts_affected": [],
-        "parent_consumers_unchanged": parent_consumers,
+        "parent_consumers_unchanged": [d["artifact"] for d in parent_consumers_detail],
+        "parent_consumers_detail": parent_consumers_detail,
         "new_artifact": consumer_artifact,
     }
 
