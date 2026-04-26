@@ -534,6 +534,98 @@ def _ascii(s: str) -> str:
     return s.encode("ascii", "replace").decode("ascii")
 
 
+def _build_prompt_for(task_id: str, plans_dir: Path, swap: bool) -> tuple[str, str, str]:
+    """Returns (prompt, plan_a_id, plan_b_id) for a given (task, swap)
+    combo. Used by both API-dispatch and the file-based mode."""
+    control_path = plans_dir / f"{task_id}__control.md"
+    treatment_path = plans_dir / f"{task_id}__treatment.md"
+    if not control_path.exists() or not treatment_path.exists():
+        raise SystemExit(
+            f"Missing plan files for {task_id} in {plans_dir}. Run "
+            f"iteration_cost.py --save-plans {plans_dir} first."
+        )
+    control_plan = control_path.read_text(encoding="utf-8")
+    treatment_plan = treatment_path.read_text(encoding="utf-8")
+    if swap:
+        return build_prompt(task_id, treatment_plan, control_plan), "treatment", "control"
+    return build_prompt(task_id, control_plan, treatment_plan), "control", "treatment"
+
+
+def _write_prompts(plans_dir: Path, task_ids: list[str], out_dir: Path) -> None:
+    """Dump one prompt file per (task, swap) combo. The caller can then
+    paste each into any Claude session — including a Claude Code
+    subagent dispatched from elsewhere — and save the JSON response
+    back to <out_dir>/<task>__<order>.scores.json. Run --scores-from
+    once all four files exist."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for task_id in task_ids:
+        for swap, label in ((False, "control_A"), (True, "treatment_A")):
+            prompt, _, _ = _build_prompt_for(task_id, plans_dir, swap)
+            f = out_dir / f"{task_id}__{label}.prompt.txt"
+            f.write_text(prompt, encoding="utf-8")
+            print(f"  wrote {f}")
+    print(
+        f"\n{2 * len(task_ids)} prompts written to {out_dir}.\n"
+        "Dispatch each prompt to any Claude session (Claude Code subagent, "
+        "claude.ai, API, etc.) and save the JSON-fenced response back to:\n"
+        f"  {out_dir}/<task>__<order>.scores.json\n"
+        "Then run: quality_rubric.py --scores-from <dir>"
+    )
+
+
+def _load_scores_from_files(scores_dir: Path) -> list[JudgeRun]:
+    """Read JSON score files dumped by an external judge. File names
+    must be <task>__<order>.scores.json where <order> is control_A or
+    treatment_A. Each file should contain the JSON shape produced by
+    the judge prompt: {"items": [...], "overall": "..."}"""
+    runs: list[JudgeRun] = []
+    for f in sorted(scores_dir.glob("*.scores.json")):
+        stem = f.stem.removesuffix(".scores")  # <task>__<order>
+        if "__" not in stem:
+            print(f"  skipping {f.name}: name doesn't match <task>__<order>", file=sys.stderr)
+            continue
+        task_id, order = stem.rsplit("__", 1)
+        if order not in ("control_A", "treatment_A"):
+            print(f"  skipping {f.name}: order must be control_A or treatment_A", file=sys.stderr)
+            continue
+        if task_id not in TASK_ASKS:
+            print(f"  skipping {f.name}: unknown task {task_id}", file=sys.stderr)
+            continue
+        plan_a_id = "control" if order == "control_A" else "treatment"
+        plan_b_id = "treatment" if order == "control_A" else "control"
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"  skipping {f.name}: JSON parse error: {e}", file=sys.stderr)
+            continue
+        scores = []
+        for item in data.get("items", []):
+            try:
+                scores.append(RubricScore(
+                    task_id=task_id,
+                    plan_a_id=plan_a_id,
+                    plan_b_id=plan_b_id,
+                    item_id=str(item["id"]),
+                    score_a=int(item["score_a"]),
+                    score_b=int(item["score_b"]),
+                    rationale=str(item.get("rationale", "")),
+                ))
+            except (KeyError, ValueError, TypeError):
+                continue
+        runs.append(JudgeRun(
+            task_id=task_id,
+            plan_a_id=plan_a_id,
+            plan_b_id=plan_b_id,
+            model=str(data.get("_judge_model", "external")),
+            in_tokens=int(data.get("_in_tokens", 0)),
+            out_tokens=int(data.get("_out_tokens", 0)),
+            wall_ms=float(data.get("_wall_ms", 0.0)),
+            overall=str(data.get("overall", "")),
+            scores=scores,
+        ))
+    return runs
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument(
@@ -547,21 +639,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--judge-model", default="claude-sonnet-4-6",
-        help="Anthropic model id for the judge. Sonnet by default; Opus for stricter discrimination.",
+        help="Anthropic model id for the judge. Ignored in --scores-from mode.",
     )
     p.add_argument(
         "--swap", action="store_true",
-        help="Put treatment as Plan A (instead of control). Use to detect labelling bias.",
+        help="API-dispatch only: put treatment as Plan A (label-bias check).",
     )
     p.add_argument(
         "--out", type=Path,
         default=REPO_ROOT / "experiments/results/quality_rubric.csv",
     )
+    p.add_argument(
+        "--write-prompts", type=Path, default=None,
+        help="No-API mode: write rubric prompts to this directory and exit. "
+             "Dispatch each prompt to any Claude session (Claude Code subagent, "
+             "claude.ai, etc.), save the JSON response as "
+             "<task>__<order>.scores.json in the same directory, then re-run "
+             "with --scores-from.",
+    )
+    p.add_argument(
+        "--scores-from", type=Path, default=None,
+        help="No-API mode: load externally-judged scores from this directory "
+             "and produce the CSV + summary without calling the API. "
+             "Filenames: <task>__<order>.scores.json where <order> is "
+             "control_A or treatment_A.",
+    )
     args = p.parse_args(argv)
-
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("ANTHROPIC_API_KEY not set.", file=sys.stderr)
-        return 1
 
     if args.tasks == "all":
         task_ids = list(TASK_ASKS.keys())
@@ -571,6 +674,32 @@ def main(argv: list[str] | None = None) -> int:
             if t not in TASK_ASKS:
                 print(f"unknown task: {t}", file=sys.stderr)
                 return 1
+
+    # No-API: write prompt files, exit. Caller dispatches externally.
+    if args.write_prompts:
+        _write_prompts(args.plans_dir, task_ids, args.write_prompts)
+        return 0
+
+    # No-API: load externally-judged scores, format and print.
+    if args.scores_from:
+        runs = _load_scores_from_files(args.scores_from)
+        if not runs:
+            print(f"No score files found in {args.scores_from}.", file=sys.stderr)
+            return 1
+        print(f"Loaded {len(runs)} judge runs from {args.scores_from}")
+        write_csv(runs, args.out)
+        print_summary(runs)
+        print(f"\nResults written to {args.out}")
+        return 0
+
+    # API path (original behavior)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "ANTHROPIC_API_KEY not set. For a no-API run, see --write-prompts "
+            "and --scores-from.",
+            file=sys.stderr,
+        )
+        return 1
 
     judge = JudgeClient(model=args.judge_model)
     print(f"judge: {args.judge_model}  |  tasks: {', '.join(task_ids)}  |  "
