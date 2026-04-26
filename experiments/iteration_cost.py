@@ -388,13 +388,43 @@ def run_dagwright_plan(spec_path: Path, manifest_path: Path, bi_path: Optional[P
         return (time.perf_counter() - t0) * 1000, f"{type(e).__name__}: {e}"
 
 
+def render_dagwright_plan_markdown(
+    spec_path: Path, manifest_path: Path, bi_path: Optional[Path]
+) -> str:
+    """Compile the spec and return the rendered markdown plan as a
+    string. Used by Experiment A to capture the final treatment plan
+    for rubric scoring; failures are caught and returned as a stub."""
+    from dagwright.loaders import SpecError, MetricRequest, DefinitionalChange
+    from dagwright.planner import run_plan
+    args = SimpleNamespace(
+        spec=spec_path,
+        manifest=manifest_path,
+        bi=bi_path,
+        top=3,
+        format="markdown",
+    )
+    try:
+        spec, plans, rejections = run_plan(args)
+    except (SpecError, Exception) as e:
+        return f"# (dagwright compile failed)\n\n{type(e).__name__}: {e}\n"
+
+    if isinstance(spec, MetricRequest):
+        from dagwright.output import render_markdown
+        return render_markdown(spec, plans, rejections)
+    if isinstance(spec, DefinitionalChange):
+        from dagwright.output import render_markdown_definitional_change
+        return render_markdown_definitional_change(spec, plans, rejections)
+    return f"# (unsupported spec kind: {type(spec).__name__})\n"
+
+
 # ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
 
 
-def run_control(task: Task, llm: LLMClient) -> list[IterationResult]:
-    """Pure prose-plan regeneration agent. Conversation grows each turn."""
+def run_control(task: Task, llm: LLMClient) -> tuple[list[IterationResult], str]:
+    """Pure prose-plan regeneration agent. Conversation grows each turn.
+    Returns (per-iteration results, final assistant plan text)."""
     summary = get_manifest_summary(task.manifest_path)
     summary_str = json.dumps(summary, indent=2)
 
@@ -424,13 +454,15 @@ def run_control(task: Task, llm: LLMClient) -> list[IterationResult]:
             llm_wall_ms=llm_ms, dagwright_wall_ms=0.0, total_wall_ms=llm_ms,
         ))
 
-    return results
+    final_plan_text = history[-1]["content"] if history else ""
+    return results, final_plan_text
 
 
-def run_treatment(task: Task, llm: LLMClient) -> list[IterationResult]:
+def run_treatment(task: Task, llm: LLMClient) -> tuple[list[IterationResult], str, str]:
     """LLM edits the spec; dagwright compiles. State lives in the spec
     file, so each call sends only the current spec + the refinement —
-    not the full conversation history."""
+    not the full conversation history. Returns (per-iteration results,
+    final spec yaml, final plan markdown)."""
     summary = get_manifest_summary(task.manifest_path)
     summary_str = json.dumps(summary, indent=2)
     schema = get_spec_schema_payload()
@@ -475,7 +507,11 @@ def run_treatment(task: Task, llm: LLMClient) -> list[IterationResult]:
             notes=err,
         ))
 
-    return results
+    final_spec_yaml = spec_path.read_text(encoding="utf-8")
+    final_plan_markdown = render_dagwright_plan_markdown(
+        spec_path, task.manifest_path, task.bi_path
+    )
+    return results, final_spec_yaml, final_plan_markdown
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +635,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="Skip API calls; synthesize plausible token counts to verify the harness wiring.")
     p.add_argument("--agent", choices=("both", "control", "treatment"), default="both",
                    help="Which agent(s) to run (default: both).")
+    p.add_argument("--save-plans", type=Path, default=None,
+                   help="Directory to dump each task's final plans (control "
+                        "= last assistant prose, treatment = rendered "
+                        "dagwright markdown + final spec). Used by "
+                        "Experiment A's quality rubric.")
     args = p.parse_args(argv)
 
     selected_tasks: list[Task] = (
@@ -621,24 +662,37 @@ def main(argv: list[str] | None = None) -> int:
 
     all_results: list[IterationResult] = []
 
+    if args.save_plans:
+        args.save_plans.mkdir(parents=True, exist_ok=True)
+
     for task in selected_tasks:
         print(f"=== task: {task.id} ===")
         if args.agent in ("both", "control"):
             print(f"--- running control: {1 + len(task.refinements)} iterations ---")
-            results = run_control(task, llm)
+            results, final_control_plan = run_control(task, llm)
             all_results.extend(results)
             for r in results:
                 print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / {r.llm_wall_ms:>6.0f} ms")
+            if args.save_plans:
+                p_out = args.save_plans / f"{task.id}__control.md"
+                p_out.write_text(final_control_plan, encoding="utf-8")
+                print(f"  saved final control plan -> {p_out}")
 
         if args.agent in ("both", "treatment"):
             print()
             print(f"--- running treatment: {1 + len(task.refinements)} iterations ---")
-            results = run_treatment(task, llm)
+            results, final_spec_yaml, final_plan_markdown = run_treatment(task, llm)
             all_results.extend(results)
             for r in results:
                 note = f"  [!] {r.notes}" if r.notes else ""
                 print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / "
                       f"llm {r.llm_wall_ms:>6.0f} ms / dw {r.dagwright_wall_ms:>5.0f} ms{note}")
+            if args.save_plans:
+                p_md = args.save_plans / f"{task.id}__treatment.md"
+                p_md.write_text(final_plan_markdown, encoding="utf-8")
+                p_yaml = args.save_plans / f"{task.id}__treatment.spec.yaml"
+                p_yaml.write_text(final_spec_yaml, encoding="utf-8")
+                print(f"  saved final treatment plan -> {p_md}")
         print()
 
     write_csv(all_results, args.out)
