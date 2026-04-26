@@ -10,6 +10,13 @@ dependencies = [
     "mcp[cli]>=1.0",
 ]
 
+[project.optional-dependencies]
+# Anthropic SDK for the experiments/ harness only — not a runtime dep.
+# Install with: uv pip install -e ".[experiments]"
+experiments = [
+    "anthropic>=0.40",
+]
+
 [project.scripts]
 dagwright = "dagwright.cli:main"
 
