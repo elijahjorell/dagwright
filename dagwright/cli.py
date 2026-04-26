@@ -35,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     watch.add_argument("--top", type=int, default=3, help="Number of top-ranked plans to emit.")
 
+    sub.add_parser(
+        "mcp",
+        help="Run the MCP server over stdio so MCP-aware LLM clients (Claude Code, "
+        "Claude Desktop, Cursor) can call dagwright as a tool.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "plan":
@@ -44,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "watch":
         from dagwright.watch import watch_command
         return watch_command(args)
+
+    if args.command == "mcp":
+        from dagwright.mcp_server import main as mcp_main
+        return mcp_main()
 
     return 1
 

@@ -133,6 +133,36 @@ across runs given identical inputs.
 
 See `specs/schema.md` for the spec shape.
 
+### MCP server (the AE-facing surface)
+
+Real AEs don't run terminal commands. They talk to Claude. dagwright
+exposes itself as an MCP (Model Context Protocol) server so any
+MCP-aware LLM client — Claude Code, Claude Desktop, Cursor — can
+invoke it as a tool. The AE describes a change in chat; Claude edits
+the spec and calls dagwright; plans + diff render inline.
+
+Add to your Claude Code MCP config (typically
+`~/.claude/claude_desktop_config.json` or your IDE's equivalent):
+
+```json
+{
+  "mcpServers": {
+    "dagwright": {
+      "command": "uv",
+      "args": ["run", "--project", "/absolute/path/to/dagwright", "dagwright", "mcp"]
+    }
+  }
+}
+```
+
+The server exposes one tool, `plan`, which takes `spec_path`,
+`manifest_path`, optional `bi_path`, and optional `top`. Returns
+serialized plans, rejections, and (on subsequent calls for the same
+spec) a markdown diff vs the previous run.
+
+The CLI commands below remain available for power users, CI, and
+debugging — but the MCP server is the headline integration.
+
 ### Watch mode (the iteration-loop UX)
 
 ```bash
