@@ -1,14 +1,14 @@
 # dagwright
 
-A **deterministic, fast, free planning-artifact layer** for analytics
-engineers. Convert architectural change requests into ranked,
-structured plans annotated with operations, contracts, invariants,
-and blast radius — in **milliseconds**, with **zero LLM tokens**, the
-**same output every time**.
+A **fast feedback loop** for AE+LLM architectural change planning.
+Plan iteration drops from ~150 seconds + ~$0.50 per LLM round-trip
+to ~20 ms + $0 per dagwright run, changing how AEs converge on a
+plan: from committing to the first plausible candidate, to exploring
+20 variations during a coffee break.
 
-dagwright doesn't replace your LLM. It's the layer your LLM workflows
-don't have today: a place where plans become reusable data instead of
-disposable prose.
+dagwright doesn't replace your LLM. It's the deterministic, structured,
+free artifact layer your LLM workflows don't have today — the surface
+you iterate against while your LLM does the thinking on either side.
 
 ## Receipts
 
@@ -28,14 +28,22 @@ viable.
 
 ## What it's good for
 
-- **CI gates.** Run dagwright in CI to check whether a PR's spec
+- **Plan iteration during development — the headline.** The cost of
+  trying a plan variation drops to ~zero. AEs stop committing to the
+  first plausible plan and start exploring: *what if must_migrate
+  excluded one consumer? what if I split this into two specs? what
+  if the new_definition pointed at a different column?* Each
+  variation produces a fresh ranked plan in milliseconds.
+  Convergence happens by exploring the local neighborhood of the
+  spec rather than reasoning about it abstractly before the first
+  run. **Fast feedback during plan-shaping changes how AEs make
+  architectural decisions.** Everything below is a downstream
+  consequence of the same speed-and-cost property.
+- **CI gates.** `dagwright check` on every PR to verify a spec
   satisfies declared contracts. Sub-second; zero token cost.
 - **Bulk planning.** Generate plans across many specs (parameter
   sweeps, exploratory analysis). Seconds for hundreds of plans;
   would be hours and meaningful dollars via LLM.
-- **Iteration loops.** AE tweaks the spec, sees plans update in
-  milliseconds. Different qualitative experience from waiting 1–2
-  minutes per try.
 - **Audit and replay.** Plans persist as artifacts. Diff plans
   across manifest revisions. Reference plans from PRs / Slack.
   Re-run last year's specs against today's DAG.

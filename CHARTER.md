@@ -8,20 +8,24 @@ don't make the change.
 ## Problem (one paragraph)
 
 When an analytics engineer plans a DAG change today, the planning
-happens — but it doesn't survive. AE+LLM workflows produce plans as
-prose in chat sessions, in PR descriptions, in Slack threads. Those
-plans aren't reproducible (same prompt twice → different plans), aren't
-reviewable as artifacts separate from the SQL they produce, can't be
-diffed when the underlying DAG changes, and can't be generated at
-scale (cost and latency scale linearly per plan against the LLM). The
-thinking is fine; the persistence is the problem.
+happens — but it's slow and ephemeral. AE+LLM workflows produce plans
+as prose in chat sessions; each plan costs ~150 seconds and ~$0.50
+per iteration. At that price the AE picks the first plausible plan
+and writes SQL — they don't iterate, because the cost of trying a
+variation is meaningful. The plan also doesn't survive: not
+reproducible (same prompt twice → different plans), not reviewable
+as an artifact separate from the SQL it produces, not diff-able when
+the DAG changes, not generatable at scale. The thinking is fine; the
+**iteration speed** and the **persistence** are the problems — and
+the iteration speed is what most directly shapes the AE's
+architectural decisions.
 
 ## Aim (one sentence)
 
-Convert AE+LLM-style architectural change planning into a
-**deterministic, structured, fast, free artifact layer** — the same
-thinking, captured as data that's reproducible, reviewable, diff-able,
-and cheap enough to run at scale.
+Make AE+LLM architectural change planning a fast feedback loop:
+sub-second, deterministic, free plan iteration so AEs converge on a
+plan by **exploring** rather than **committing** to the first plausible
+candidate.
 
 ## What dagwright is *not*
 
@@ -54,9 +58,28 @@ The artifact layer that AE+LLM workflows lack. Specifically:
 - **Free.** Zero LLM tokens per plan. Cost scales with manifest
   size, not plan count.
 
-## Use cases the artifact layer unlocks
+## What this changes about AE workflows
 
-The properties above unlock workflows AE+LLM-as-prose can't reach:
+The properties above turn dagwright into a fast feedback loop for
+AE+LLM plan-shaping. The headline benefit is per-AE and every-use:
+
+- **Iteration during plan-shaping.** The cost of trying a plan
+  variation drops to zero — both in time and in dollars. AEs stop
+  committing to the first plausible plan and start exploring:
+  *what if `must_migrate` excluded `product_pulse`? what if I split
+  this into two specs? what if the new_definition pointed at a
+  different column?* Each variation produces a fresh ranked plan in
+  milliseconds. Convergence happens by exploring the local
+  neighborhood of the spec, not by reasoning about it abstractly
+  before the first run. **This is the central value of dagwright —
+  fast feedback during plan-shaping changes how AEs make
+  architectural decisions.** All the properties above (deterministic,
+  structured, fast, free) exist to enable this loop. Everything else
+  is downstream.
+
+The same speed and cost properties have institutional follow-on
+benefits at team / org scale, useful but secondary to the per-AE
+iteration loop:
 
 - **CI gates.** `dagwright check` on every PR — pass/fail on
   declared contracts. Sub-second; zero token cost. LLM-in-CI is
@@ -64,9 +87,6 @@ The properties above unlock workflows AE+LLM-as-prose can't reach:
 - **Bulk analysis.** Generate plans across a parameter sweep ("what
   if every 'active' metric became desktop-only"). Seconds for
   hundreds of plans; would be hours and meaningful dollars via LLM.
-- **Iteration loops.** AE tweaks the spec, sees plans update in
-  milliseconds. Different qualitative experience from waiting 1–2
-  minutes per try.
 - **Historical replay.** Re-run last year's specs against today's
   manifest. See what plans changed because the DAG changed
   underneath. Free.

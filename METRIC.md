@@ -12,16 +12,20 @@ A plan counts as "executable + used" when:
 - Grain is correct
 - The author would copy the plan into a PR (or sequence of PRs)
   without major revision
-- **AND** the AE chose to run dagwright instead of (or alongside)
-  AE+LLM-as-prose because they wanted the artifact properties:
-  determinism, audit trail, bulk generation, CI integration, or
-  spec-driven iteration.
+- **AND** the AE chose to run dagwright because they wanted the
+  artifact properties — most centrally, the **fast feedback loop
+  during plan-shaping** (sub-second iteration on spec variations,
+  zero-token cost). Institutional follow-ons (CI gates, bulk
+  generation, audit trail) count too, but the headline use case
+  is per-AE iteration.
 
 The "and" clause is critical. April 25, 2026 established empirically
 that AE+LLM with the manifest in context produces plans of comparable
 or richer content than dagwright. Counting "the plan was correct" as
 the metric would over-credit dagwright for thinking that AE+LLM
-already does. The metric tracks adoption of the artifact layer.
+already does. The metric tracks adoption of the artifact layer —
+specifically, whether the speed-and-cost property is enabling the
+exploration workflow the project is selling.
 
 ## Scope levels
 
@@ -66,24 +70,36 @@ the highest scope reached and how often.
 The artifact-property pivot reshapes what to track alongside the
 primary metric:
 
+- **Iteration loops per AE session.** How many spec variations does
+  an AE try before settling on the plan they execute? If consistently
+  1, the iteration story isn't landing — they're still committing
+  to the first plan, and the speed advantage isn't translating into
+  changed behavior. Higher numbers mean the workflow shift the
+  project is selling is actually happening. Hard to measure without
+  telemetry; worth at least tracking informally during dogfooding.
 - **Latency.** Time from CLI invocation to JSON/markdown output.
-  Must stay sub-second for typical manifests. Floor:
-  ~milliseconds. Ceiling: 1 second.
+  Must stay sub-second for typical manifests. Floor: ~milliseconds.
+  Ceiling: 1 second. The iteration-loop benefit collapses if
+  latency creeps up.
 - **Token cost.** Must remain zero. Any future feature that calls
-  out to an LLM violates the cost story.
-- **Determinism check.** Same spec + same manifest run twice → byte-
-  identical output (or at minimum: same plan ordering, identical
-  operation lists, identical scores). Regression risk if not.
+  out to an LLM violates the cost story and re-introduces the
+  per-iteration friction the project exists to remove.
+- **Determinism check.** Same spec + same manifest run twice →
+  byte-identical output (or at minimum: same plan ordering,
+  identical operation lists, identical scores).
 - **Plan reuse.** How often plans are referenced *after* the
-  authoring run — in PRs, Slack, post-mortems, replay scripts. If
-  this is zero, the artifact isn't doing its job.
-- **Spec authoring cost.** Time and tokens an LLM spends turning a
-  natural-language stakeholder note into a valid dagwright-spec.
-  Must stay below what one round-trip of LLM plan generation would
-  cost; otherwise the layer is net-negative.
+  authoring run — in PRs, Slack, post-mortems, replay scripts.
+  If this is zero, the artifact isn't doing its persistence job
+  even if the iteration loop is being used.
+- **Spec authoring cost.** Time and tokens an LLM spends turning
+  a natural-language stakeholder note into a valid dagwright-spec.
+  Must stay below what one round-trip of LLM plan generation
+  would cost; otherwise the layer is net-negative. (Once the AE
+  is iterating on the spec, the per-iteration cost drops to zero
+  — the spec-fill cost is paid once at the start of the loop.)
 - **Sweep capability.** Largest N specs run in one batch (`dagwright
-  sweep` or equivalent). When implemented, this is a use case
-  AE+LLM-as-prose can't realistically replicate.
+  sweep` or equivalent). Institutional metric, follows from the
+  same speed property as iteration loops but at scale.
 
 ## Kill-criteria-linked signal
 
