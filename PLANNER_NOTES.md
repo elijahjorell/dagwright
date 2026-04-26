@@ -129,37 +129,40 @@ fixture forces.
 
 The slice planned for the next engine iteration, scoped to the
 June 30 multi-spec milestone in `METRIC.md`. Target fixture:
-`tests/jaffle_shop_modern/specs/customer_domain.target.yaml`.
+`tests/jaffle_shop_modern/specs/customer_bundle.target.yaml`.
+
+The unit of input becomes a **change_bundle** — a list of forward
+requirements scoped to a list of in-scope dbt models. The scope is
+not constrained to "a domain" in any structural sense; it can be a
+single model, a sub-domain slice, a whole nominal domain, or a
+cross-domain set. Domain-shaped scopes are the most common useful
+case but not a requirement.
 
 What it adds beyond today's slice:
 
-1. **Domain envelope.** Top-level spec becomes `kind: domain`,
-   with `scope.models`, `contracts`, and `forward_requirements`.
-   Existing per-request shapes embed unchanged inside the list.
+1. **change_bundle envelope.** Top-level spec becomes
+   `kind: change_bundle`, with `scope.models`, `contracts`, and
+   `forward_requirements`. Existing per-request shapes embed
+   unchanged inside the list.
 2. **Contract derivation from the BI graph.** When
    `contracts.derive_from_bi: true`, the engine materializes a
    contract per (artifact, node, column) read on in-scope models.
    `additional` and `relax` adjust the derived set.
 3. **`definitional_change` as a forward-requirement kind.** Plan
-   shapes the engine enumerates:
-   - Replace in place — violates contracts in `must_migrate` per
-     (c); surfaces as contract-broken, not invisible.
-   - Add a new column with the new definition; emit
-     `update_consumer` per consumer in `must_migrate`.
-   - Versioned mart (e.g. `customers_v2`); old node stays for
-     consumers not in `must_migrate`.
-   - Consumer-only change — when a column already on the target
-     node satisfies the new definition, plan is just
-     `update_consumer` ops, no dbt change.
-4. **`update_consumer` plan operation.** Catalog addition.
+   shapes the engine enumerates: replace_in_place,
+   add_versioned_column, versioned_mart, consumer_only.
+   (Already implemented as a standalone spec; reused inside
+   bundles unchanged.)
+4. **`update_consumer` plan operation.** Catalog entry already
+   present; orchestrator wiring needed.
 5. **Multi-spec orchestration.** Each forward requirement planned
-   independently against the same domain state; outputs bundled.
-   Cross-requirement plan optimization deferred.
+   independently against the same scope-level derived contracts;
+   outputs bundled. Cross-requirement plan optimization deferred.
 
 What it explicitly does NOT add (deferred):
 
-- Auto-extraction of domain scope or contracts beyond what the AE
-  declares or what's already in the BI fixture.
+- Auto-extraction of scope or contracts beyond what the AE declares
+  or what's already in the BI fixture.
 - Modify-existing for kinds other than `definitional_change`.
 - Cross-requirement plan interactions (shared intermediates,
   conflict detection).
@@ -167,32 +170,32 @@ What it explicitly does NOT add (deferred):
 
 ### Surgery (file-by-file)
 
-- `dagwright/state.py` — add `DomainSpec`, `Contract`,
-  `DefinitionalChange`, `ForwardRequirement` (tagged union).
-  Existing `MetricRequest` unchanged; nests inside
-  `DomainSpec.forward_requirements`.
-- `dagwright/loaders.py` — `load_domain_spec` dispatches on
-  top-level `kind`. Bare-`metric_request` loader stays as
-  fallback for backwards compatibility with the existing fixture.
-- `dagwright/planner.py` — `plan_domain` orchestrator;
-  `plan_definitional_change` enumerating the four plan shapes;
-  contract-derivation helper.
-- `dagwright/output.py` — bundle rendering; option-(c) violation
-  rendering.
-- `catalog/operations.yaml` — add `update_consumer`.
-- `dagwright/cli.py` — dispatch on top-level `kind`; no new
-  flags.
+- `dagwright/state.py` — add `ChangeBundle`, `Contract`,
+  `Scope`, `ContractsConfig`, `ForwardRequirement` (tagged union).
+  Existing `MetricRequest` and `DefinitionalChange` unchanged; both
+  nest unchanged inside `ChangeBundle.forward_requirements`.
+- `dagwright/loaders.py` — extend `load_spec` to dispatch
+  `kind: change_bundle`. Bare-kind loaders stay as is.
+- `dagwright/planner.py` — `plan_change_bundle` orchestrator;
+  `derive_contracts` lifted from inside `plan_definitional_change`
+  to scope-level (so all forward requirements see the same derived
+  contracts).
+- `dagwright/output.py` — bundle rendering with one section per
+  forward requirement plus a header showing scope + derived contract
+  count.
+- `dagwright/cli.py` — dispatch on top-level `kind`; no new flags.
 
 ### Order of work
 
-1. State types + loader for the domain envelope.
-2. `update_consumer` operation in catalog.
-3. `plan_definitional_change` against a minimal hand-built
-   fixture. **Load-bearing step** — if the four plan shapes don't
-   read as executable, the rest is wasted plumbing.
-4. Domain orchestrator + multi-spec rendering.
-5. Promote target spec from `.target` to a real fixture.
-6. End-to-end run on jaffle_shop_modern; log to METRIC.md.
+1. State types + loader for the bundle envelope.
+2. `plan_change_bundle` orchestrator against the renamed target
+   fixture. **Load-bearing step** — if the bundle output doesn't
+   read coherently across multiple forward requirements, the rest
+   is wasted plumbing.
+3. Bundle rendering in `output.py`.
+4. Promote target spec from `.target` to a real fixture.
+5. End-to-end run on jaffle_shop_modern; log to METRIC.md.
+6. Bundle-level diff helper in `diff.py`.
 
 ## Plan diff implementation state
 

@@ -34,11 +34,11 @@ the highest scope reached and how often.
 
 - **n=1 (single-spec).** One requirement against the manifest;
   plan adds or modifies one thing.
-- **multi-spec.** Multiple forward requirements within one domain;
-  plan must satisfy them coherently.
-- **domain-scoped.** Domain spec includes contracts derived from
-  real BI consumers; plan can restructure freely as long as
-  contracts hold.
+- **multi-spec.** Multiple forward requirements within one
+  change_bundle scope; plan must satisfy them coherently.
+- **scope-derived contracts.** change_bundle includes contracts
+  derived from real BI consumers of in-scope models; plan can
+  restructure freely as long as contracts hold.
 
 ## Target trajectory
 
@@ -49,10 +49,11 @@ the highest scope reached and how often.
   exposures). Plan judged executable. Validation of the
   artifact-property thesis: ~20ms, 0 tokens, reproducible output.
   **Hit.**
-- **June 30, 2026** — first multi-spec plan within one domain on a
+- **June 30, 2026** — first multi-spec change_bundle plan against a
   real-world manifest. Forward requirements include at least one
-  preservation-under-change case.
-- **August 31, 2026** — first domain-scoped plan against a
+  preservation-under-change case. Scope can be domain-shaped or
+  not; the engine doesn't care.
+- **August 31, 2026** — first change_bundle plan against a
   realistic dbt project that an external AE has actually used.
   External use is the validation that the artifact properties are
   worth the integration cost.

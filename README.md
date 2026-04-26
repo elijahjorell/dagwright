@@ -91,8 +91,8 @@ manifest (302 models, 12 in-tree dbt exposures used as the BI graph).
 Both April 30 and June 30 kill-criteria hit early. Next milestones
 (see `METRIC.md`):
 
-- **August 31, 2026** — first domain-scoped plan that an external AE
-  has actually used.
+- **August 31, 2026** — first change_bundle plan that an external AE
+  has actually used on their own dbt project.
 
 The hand-coded planner has narrow bounds. Read `PLANNER_NOTES.md`
 before trusting a "no plans" output.

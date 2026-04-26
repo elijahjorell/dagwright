@@ -219,7 +219,7 @@ def discover_specs(root_path: str) -> list[dict]:
     """Find dagwright specs under `root_path`. Walks the directory
     tree, looks at every .yaml / .yml file, returns those that have
     a recognised top-level `kind` field (`metric_request`,
-    `definitional_change`, `domain`).
+    `definitional_change`, `change_bundle`).
 
     Returns a list of dicts: {spec_path, kind, id, intent_excerpt}.
     The AE doesn't have to remember spec paths — the LLM finds them.
@@ -231,7 +231,7 @@ def discover_specs(root_path: str) -> list[dict]:
     if not root.exists():
         return [{"error": f"path does not exist: {root_path}"}]
 
-    recognised_kinds = {"metric_request", "definitional_change", "domain"}
+    recognised_kinds = {"metric_request", "definitional_change", "change_bundle"}
     for p in root.rglob("*.yaml"):
         out.extend(_scan_one(p, recognised_kinds))
     for p in root.rglob("*.yml"):

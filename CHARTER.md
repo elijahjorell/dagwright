@@ -230,17 +230,35 @@ iteration loop:
   stay zero. If a feature would push past either, it pays the
   budget cost in justification.
 
-## Domain framing (still useful, no longer the headline)
+## Scope framing (the unit of input)
+
+The unit of input is a **scope** — a list of in-scope dbt models —
+plus a set of forward requirements against that scope. The scope can
+be a single model, a sub-domain slice, a whole nominal domain, or a
+cross-domain set. Domain-shaped scopes (one AE's owned territory)
+are the most common useful choice — ownership is clear, consumers
+are enumerable, and plan coherence is tractable — but the primitive
+is the model list, not the domain concept.
+
+This matters because real change requests don't always align to org
+charts: a finance-driven definitional change can ripple through
+customer + orders models simultaneously; an exploratory refactor
+might want to scope just three intermediate marts. Constraining the
+spec format to "one domain per spec" would close off both cases for
+no engine-side reason.
 
 Earlier charter revisions led with "domain is the unit of work."
-That's still true — domains are how AEs partition mature DAGs, the
-boundary at which one AE owns the work and consumer requirements are
-enumerable. The domain envelope (multi-spec input, BI-graph derived
-contracts, bundled plan output) is still on the roadmap. But it's
-secondary to the artifact-property thesis: dagwright's value is in
-*how* it produces plans (deterministic, fast, free, structured), not
-*what unit* the plans address. Domains scope the input neatly;
-artifact properties are why dagwright exists.
+That's still a useful workflow heuristic — domains are how AEs
+partition mature DAGs — but it's a *convention about which scopes
+are most ergonomic*, not a structural requirement of the spec
+language. The change_bundle envelope (multi-spec input, BI-graph
+derived contracts, bundled plan output) accepts any scope.
+
+This is secondary to the artifact-property thesis anyway:
+dagwright's value is in *how* it produces plans (deterministic,
+fast, free, structured), not *what unit* the plans address. Scopes
+make the input tractable; artifact properties are why dagwright
+exists.
 
 ## Kill criteria
 

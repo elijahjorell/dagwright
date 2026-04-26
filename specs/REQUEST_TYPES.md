@@ -2,12 +2,13 @@
 
 Taxonomy of stakeholder requests AEs receive against an analytics
 DAG. Each entry is a candidate `kind` for a forward requirement
-inside the dagwright-spec (the domain spec). One domain spec
-typically bundles several requirements of various kinds alongside
-the domain's scope and contracts to preserve. This is the **input
-ontology** (what stakeholders ask). The **output ontology** (DAG
-operations the planner emits — add/remove/rewire nodes, change
-grain, etc.) is separate and lives in `catalog/operations.yaml`.
+inside a dagwright change_bundle. One change_bundle typically
+groups several requirements of various kinds alongside the bundle's
+scope (a list of in-scope dbt models) and contracts to preserve.
+This is the **input ontology** (what stakeholders ask). The
+**output ontology** (DAG operations the planner emits —
+add/remove/rewire nodes, change grain, etc.) is separate and lives
+in `catalog/operations.yaml`.
 
 Listed for design context. A type is only official once it has a
 concrete fixture example and a payload schema in `specs/schema.md`.
@@ -100,7 +101,7 @@ distinctive value.
 
 `CHARTER.md` (artifact-property revision) frames dagwright as a
 deterministic, fast, free planning-artifact layer rather than a
-domain-scoped reasoning engine. The dagwright-spec remains the input
+scope-bound reasoning engine. The dagwright-spec remains the input
 to that layer. Each spec belongs to one of the kinds catalogued
 above; the kinds describe *what stakeholders ask for*, not what
 shape dagwright "wants." v0 implements `metric_request` and

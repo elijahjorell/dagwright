@@ -1,14 +1,20 @@
 # Target spec — not yet runnable.
 #
-# Design artifact for the dagwright domain spec format described
-# in CHARTER.md (post-rewrite). The current engine reads bare
-# metric_request specs, not domain envelopes. When the engine
-# extends to handle multi-spec input within a domain envelope,
-# this file becomes a real fixture; until then it exists for
-# review and to drive engine design.
+# Design artifact for the dagwright change_bundle format described
+# in CHARTER.md. The current engine reads bare metric_request and
+# definitional_change specs, not bundles. When the engine extends to
+# handle multi-spec input scoped to a subdag, this file becomes a
+# real fixture; until then it exists for review and to drive engine
+# design.
 #
-# Story exercised: customer domain on jaffle_shop_modern. Two
-# forward requirements:
+# A change_bundle scopes a set of forward requirements to a list of
+# in-scope dbt models. The scope happens to align to a "domain"
+# (one AE's owned territory) here, but the primitive is the model
+# list, not the domain concept — cross-domain and sub-domain bundles
+# are equally valid.
+#
+# Story exercised: the customer-mart slice of jaffle_shop_modern.
+# Two forward requirements:
 #   (a) add new_customers_monthly metric.
 #   (b) align "lifetime spend" with finance's pre-tax definition.
 #
@@ -19,10 +25,10 @@
 # is a contract risk even though the column-level read still
 # resolves, and rank plan alternatives accordingly.
 
-kind: domain
+kind: change_bundle
 id: customer
 intent: >
-  Customer domain on jaffle_shop_modern. Owns the customer mart.
+  Bundle scoped to the customer mart on jaffle_shop_modern.
   Currently delivers customer overview to executive_overview.
   Forward work: a monthly acquisition metric for the growth team,
   and aligning "lifetime spend" with finance's pre-tax definition.
