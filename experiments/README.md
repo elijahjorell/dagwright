@@ -37,15 +37,30 @@ Run:
 ```bash
 # dry-run (no API calls; verify harness wiring)
 uv run --no-sync python experiments/iteration_cost.py --dry-run
+uv run --no-sync python experiments/iteration_cost.py --task all --dry-run
 
-# real run
+# real run — single task
 export ANTHROPIC_API_KEY=sk-ant-...
 uv pip install -e ".[experiments]"
 uv run --extra experiments python experiments/iteration_cost.py \
   --task new_customers_monthly \
   --model claude-sonnet-4-6 \
   --out experiments/results/iteration_cost.csv
+
+# real run — all wired tasks (single CSV; per-task ratios printed)
+uv run --extra experiments python experiments/iteration_cost.py \
+  --task all \
+  --model claude-sonnet-4-6 \
+  --out experiments/results/iteration_cost.csv
 ```
+
+Three tasks are wired today:
+
+| Task | Spec kind | Manifest | Why |
+|---|---|---|---|
+| `new_customers_monthly` | metric_request | jaffle_shop_modern (small) | Original headline task; dense aggregation. |
+| `lifetime_spend_pretax` | definitional_change | jaffle_shop_modern (small) | Tests that the cost shape holds for a different spec kind. |
+| `dau_desktop_only` | definitional_change | mattermost (302 models) | Tests that the cost shape holds when manifest context is ~10× larger (real-world scale). |
 
 The CSV has one row per (agent, iteration). Columns:
 

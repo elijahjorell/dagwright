@@ -40,11 +40,18 @@ Usage:
 
   # Dry run (no API calls; confirms harness wiring)
   uv run python experiments/iteration_cost.py --dry-run
+  uv run python experiments/iteration_cost.py --task all --dry-run
 
-  # Real run against Anthropic
+  # Real run against Anthropic — single task
   export ANTHROPIC_API_KEY=sk-ant-...
   uv run --extra experiments python experiments/iteration_cost.py \\
     --task new_customers_monthly \\
+    --model claude-sonnet-4-6 \\
+    --out experiments/results/iteration_cost.csv
+
+  # Real run — all wired tasks (single CSV; per-task ratios printed)
+  uv run --extra experiments python experiments/iteration_cost.py \\
+    --task all \\
     --model claude-sonnet-4-6 \\
     --out experiments/results/iteration_cost.csv
 """
@@ -111,6 +118,69 @@ TASKS: dict[str, Task] = {
             "spend across these new customers.",
             "Refine: bump the contract tier from standard to critical "
             "because finance is now a downstream consumer.",
+        ],
+    ),
+    "lifetime_spend_pretax": Task(
+        id="lifetime_spend_pretax",
+        initial_ask=(
+            "Finance has standardized revenue reporting on pre-tax lifetime "
+            "spend, but the executive_overview dashboard currently reads "
+            "customers.lifetime_spend which is post-tax (post_tax = "
+            "lifetime_spend_pretax + lifetime_tax_paid). Align the "
+            "dashboard's reading to the pre-tax basis without breaking the "
+            "executive_overview contract. Produce a plan: what changes in "
+            "the customers model, how to handle the executive_overview "
+            "contract, blast radius on other consumers, and the migration "
+            "shape (in-place rename, versioned column, separate model)."
+        ),
+        manifest_path=REPO_ROOT / "tests/jaffle_shop_modern/manifest.json",
+        bi_path=REPO_ROOT / "tests/jaffle_shop_modern/metabase.json",
+        refinements=[
+            "Refine: finance now wants a deprecation window — allow both "
+            "definitions to coexist for one quarter rather than a hard "
+            "cutover.",
+            "Refine: a second consumer (cfo_pulse dashboard) was just "
+            "discovered reading the same column; treat it as a must-migrate.",
+            "Refine: switch the new definition's expression — pre-tax should "
+            "be lifetime_spend_pretax minus refunds, not the raw column.",
+            "Refine: bump the contract tier from standard to critical — "
+            "finance treats this as audit-relevant.",
+            "Refine: rename the conceptual basis from 'pre_tax' to "
+            "'gaap_revenue' to match finance's vocabulary.",
+        ],
+    ),
+    "dau_desktop_only": Task(
+        id="dau_desktop_only",
+        initial_ask=(
+            "Product leadership has decided the company's headline DAU "
+            "metric should reflect desktop usage only — mobile is a "
+            "different segment with separate ownership and the combined "
+            "number was hiding desktop trends. The "
+            "fct_active_users.daily_active_users column drives "
+            "customer_journey_and_new_logo_exposure and product_pulse "
+            "dashboards; both must reflect the new desktop-only definition. "
+            "Other consumers (data science notebooks, internal Hub views) "
+            "may continue reading the all-platforms definition. Produce a "
+            "plan: how the model changes, contract handling on the "
+            "must-migrate dashboards, blast radius on other readers, and "
+            "the migration shape."
+        ),
+        manifest_path=REPO_ROOT / "tests/mattermost/manifest.json",
+        bi_path=None,  # Mattermost uses in-tree dbt exposures, no metabase.json
+        refinements=[
+            "Refine: marketing pushed back — they want the all-platforms "
+            "definition preserved as a separate column rather than replaced. "
+            "Rework the plan to keep both.",
+            "Refine: a third dashboard (board_metrics) consumes the same "
+            "column and must also migrate to desktop-only.",
+            "Refine: tighten allow_stale_consumers — no consumers may keep "
+            "reading the old definition once the change ships; hard cutover.",
+            "Refine: split fct_active_users into fct_active_users_desktop "
+            "and fct_active_users_mobile rather than retrofitting the "
+            "existing model.",
+            "Refine: bump the change to a versioned column model — keep "
+            "daily_active_users available alongside "
+            "daily_active_users_desktop_only for one release cycle.",
         ],
     ),
 }
@@ -433,37 +503,67 @@ def write_csv(results: list[IterationResult], out_path: Path) -> None:
 
 
 def print_summary(results: list[IterationResult]) -> None:
+    task_ids = sorted({r.task_id for r in results})
+    multi_task = len(task_ids) > 1
+
     print()
-    print("=" * 78)
+    print("=" * 90)
     print("Per-iteration totals")
-    print("=" * 78)
-    header = f"{'agent':>10}  {'iter':>4}  {'in_tok':>8}  {'out_tok':>8}  {'llm_ms':>9}  {'dw_ms':>7}"
+    print("=" * 90)
+    if multi_task:
+        header = f"{'task':>22}  {'agent':>10}  {'iter':>4}  {'in_tok':>8}  {'out_tok':>8}  {'llm_ms':>9}  {'dw_ms':>7}"
+    else:
+        header = f"{'agent':>10}  {'iter':>4}  {'in_tok':>8}  {'out_tok':>8}  {'llm_ms':>9}  {'dw_ms':>7}"
     print(header)
     print("-" * len(header))
     for r in results:
+        prefix = f"{r.task_id[:22]:>22}  " if multi_task else ""
         print(
-            f"{r.agent_kind:>10}  {r.iteration:>4}  "
+            f"{prefix}{r.agent_kind:>10}  {r.iteration:>4}  "
             f"{r.llm_input_tokens:>8}  {r.llm_output_tokens:>8}  "
             f"{r.llm_wall_ms:>9.0f}  {r.dagwright_wall_ms:>7.0f}"
         )
 
+    def aggregate(rows: list[IterationResult], key: tuple) -> dict:
+        agg = {"iterations": 0, "in_tok": 0, "out_tok": 0, "llm_ms": 0.0, "dw_ms": 0.0}
+        for r in rows:
+            agg["iterations"] += 1
+            agg["in_tok"] += r.llm_input_tokens
+            agg["out_tok"] += r.llm_output_tokens
+            agg["llm_ms"] += r.llm_wall_ms
+            agg["dw_ms"] += r.dagwright_wall_ms
+        return agg
+
+    if multi_task:
+        print()
+        print("=" * 90)
+        print("Per-task ratios")
+        print("=" * 90)
+        for tid in task_ids:
+            task_rows = [r for r in results if r.task_id == tid]
+            by_a = {ak: aggregate([r for r in task_rows if r.agent_kind == ak], ()) for ak in ("control", "treatment")}
+            c, t = by_a["control"], by_a["treatment"]
+            if not c["iterations"] or not t["iterations"]:
+                continue
+            c_tok = c["in_tok"] + c["out_tok"]
+            t_tok = t["in_tok"] + t["out_tok"]
+            tok_ratio = c_tok / t_tok if t_tok else float("inf")
+            wall_ratio = (c["llm_ms"] + c["dw_ms"]) / (t["llm_ms"] + t["dw_ms"]) if (t["llm_ms"] + t["dw_ms"]) else float("inf")
+            print(
+                f"  {tid:>30}: control {c_tok:>6} tok / {(c['llm_ms']+c['dw_ms'])/1000:>5.1f}s ; "
+                f"treatment {t_tok:>5} tok / {(t['llm_ms']+t['dw_ms'])/1000:>5.1f}s ; "
+                f"ratios {tok_ratio:>5.1f}x tok, {wall_ratio:>5.1f}x wall"
+            )
+
     print()
-    print("=" * 78)
-    print("Totals by agent")
-    print("=" * 78)
-    by_agent: dict[str, dict] = {}
-    for r in results:
-        a = by_agent.setdefault(r.agent_kind, {
-            "iterations": 0, "in_tok": 0, "out_tok": 0,
-            "llm_ms": 0.0, "dw_ms": 0.0,
-        })
-        a["iterations"] += 1
-        a["in_tok"] += r.llm_input_tokens
-        a["out_tok"] += r.llm_output_tokens
-        a["llm_ms"] += r.llm_wall_ms
-        a["dw_ms"] += r.dagwright_wall_ms
+    print("=" * 90)
+    print("Totals by agent" + (" (across all tasks)" if multi_task else ""))
+    print("=" * 90)
+    by_agent: dict[str, dict] = {ak: aggregate([r for r in results if r.agent_kind == ak], ()) for ak in ("control", "treatment")}
 
     for agent, t in by_agent.items():
+        if not t["iterations"]:
+            continue
         total_tok = t["in_tok"] + t["out_tok"]
         total_ms = t["llm_ms"] + t["dw_ms"]
         print(
@@ -472,8 +572,8 @@ def print_summary(results: list[IterationResult]) -> None:
             f"{total_ms / 1000:>5.1f} s wall"
         )
 
-    if "control" in by_agent and "treatment" in by_agent:
-        c, t = by_agent["control"], by_agent["treatment"]
+    c, t = by_agent["control"], by_agent["treatment"]
+    if c["iterations"] and t["iterations"]:
         c_total = c["in_tok"] + c["out_tok"]
         t_total = t["in_tok"] + t["out_tok"]
         ratio = c_total / t_total if t_total else float("inf")
@@ -489,7 +589,9 @@ def print_summary(results: list[IterationResult]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--task", default="new_customers_monthly", choices=sorted(TASKS.keys()))
+    p.add_argument("--task", default="new_customers_monthly",
+                   choices=sorted(TASKS.keys()) + ["all"],
+                   help="Task id, or 'all' to run every task in TASKS sequentially.")
     p.add_argument("--model", default="claude-sonnet-4-6",
                    help="Anthropic model id (default: claude-sonnet-4-6)")
     p.add_argument("--out", type=Path, default=REPO_ROOT / "experiments/results/iteration_cost.csv")
@@ -499,7 +601,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="Which agent(s) to run (default: both).")
     args = p.parse_args(argv)
 
-    task = TASKS[args.task]
+    selected_tasks: list[Task] = (
+        list(TASKS.values()) if args.task == "all" else [TASKS[args.task]]
+    )
 
     if not args.dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         print(
@@ -510,29 +614,32 @@ def main(argv: list[str] | None = None) -> int:
 
     llm = LLMClient(model=args.model, dry_run=args.dry_run)
 
-    print(f"task:    {task.id}")
+    print(f"tasks:   {', '.join(t.id for t in selected_tasks)}")
     print(f"model:   {args.model}{' (DRY RUN)' if args.dry_run else ''}")
     print(f"out:     {args.out}")
     print()
 
     all_results: list[IterationResult] = []
 
-    if args.agent in ("both", "control"):
-        print(f"--- running control: {1 + len(task.refinements)} iterations ---")
-        results = run_control(task, llm)
-        all_results.extend(results)
-        for r in results:
-            print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / {r.llm_wall_ms:>6.0f} ms")
+    for task in selected_tasks:
+        print(f"=== task: {task.id} ===")
+        if args.agent in ("both", "control"):
+            print(f"--- running control: {1 + len(task.refinements)} iterations ---")
+            results = run_control(task, llm)
+            all_results.extend(results)
+            for r in results:
+                print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / {r.llm_wall_ms:>6.0f} ms")
 
-    if args.agent in ("both", "treatment"):
+        if args.agent in ("both", "treatment"):
+            print()
+            print(f"--- running treatment: {1 + len(task.refinements)} iterations ---")
+            results = run_treatment(task, llm)
+            all_results.extend(results)
+            for r in results:
+                note = f"  [!] {r.notes}" if r.notes else ""
+                print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / "
+                      f"llm {r.llm_wall_ms:>6.0f} ms / dw {r.dagwright_wall_ms:>5.0f} ms{note}")
         print()
-        print(f"--- running treatment: {1 + len(task.refinements)} iterations ---")
-        results = run_treatment(task, llm)
-        all_results.extend(results)
-        for r in results:
-            note = f"  [!] {r.notes}" if r.notes else ""
-            print(f"  iter {r.iteration}: {r.llm_input_tokens:>6} in / {r.llm_output_tokens:>5} out / "
-                  f"llm {r.llm_wall_ms:>6.0f} ms / dw {r.dagwright_wall_ms:>5.0f} ms{note}")
 
     write_csv(all_results, args.out)
     print_summary(all_results)
