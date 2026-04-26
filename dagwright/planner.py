@@ -87,6 +87,15 @@ class Rejection:
 
 
 def plan_command(args) -> int:
+    spec, plans, rejections = run_plan(args)
+    render_plan_output(args, spec, plans, rejections)
+    return 0 if plans else 2
+
+
+def run_plan(args):
+    """Load inputs, dispatch on spec kind, return (spec, plans,
+    rejections). No I/O. Used by plan_command and by watch mode
+    (which needs the plan list for diffing before rendering)."""
     dag = load_manifest(args.manifest)
     if args.bi:
         cg = load_consumer_graph(args.bi)
@@ -98,8 +107,23 @@ def plan_command(args) -> int:
 
     if isinstance(spec, MetricRequest):
         plans, rejections = plan_metric_request(dag, cg, spec)
-        plans.sort(key=lambda p: -p.score)
-        plans = plans[: args.top]
+    elif isinstance(spec, DefinitionalChange):
+        plans, rejections = plan_definitional_change(dag, cg, spec)
+    else:
+        raise NotImplementedError(
+            f"run_plan does not handle spec kind: {type(spec).__name__}"
+        )
+
+    plans.sort(key=lambda p: -p.score)
+    plans = plans[: args.top]
+    return spec, plans, rejections
+
+
+def render_plan_output(args, spec, plans, rejections) -> None:
+    """Print plans in the format(s) the args specify. Pure I/O —
+    splits cleanly from run_plan so watch mode can interleave a diff
+    between them."""
+    if isinstance(spec, MetricRequest):
         if args.format in ("json", "both"):
             from dagwright.output import render_json
             print(render_json(spec, plans, rejections))
@@ -108,24 +132,21 @@ def plan_command(args) -> int:
         if args.format in ("markdown", "both"):
             from dagwright.output import render_markdown
             print(render_markdown(spec, plans, rejections))
-        return 0 if plans else 2
+        return
 
     if isinstance(spec, DefinitionalChange):
-        dc_plans, rejections = plan_definitional_change(dag, cg, spec)
-        dc_plans.sort(key=lambda p: -p.score)
-        dc_plans = dc_plans[: args.top]
         if args.format in ("json", "both"):
             from dagwright.output import render_json_definitional_change
-            print(render_json_definitional_change(spec, dc_plans, rejections))
+            print(render_json_definitional_change(spec, plans, rejections))
         if args.format == "both":
             print()
         if args.format in ("markdown", "both"):
             from dagwright.output import render_markdown_definitional_change
-            print(render_markdown_definitional_change(spec, dc_plans, rejections))
-        return 0 if dc_plans else 2
+            print(render_markdown_definitional_change(spec, plans, rejections))
+        return
 
     raise NotImplementedError(
-        f"plan_command does not handle spec kind: {type(spec).__name__}"
+        f"render_plan_output does not handle spec kind: {type(spec).__name__}"
     )
 
 

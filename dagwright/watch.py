@@ -3,8 +3,14 @@
 The point: turn the iteration loop the project sells (sub-second
 plan generation, zero token cost) into a live UX. Without this, the
 AE saves their spec and re-runs the CLI by hand. With it, save = new
-plan, with no command in between. See CHARTER.md "What this changes
-about AE workflows" for the framing.
+plan, with no command in between. See CHARTER.md "How the workflow
+actually runs" for the framing.
+
+Plan diff is rendered between consecutive runs so the AE doesn't
+have to re-read the full plan to spot what changed — under the
+compiler framing, the AE consumes the plan, not the spec, so the
+plan-side delta is the only signal of "what did my last NL request
+actually change?".
 """
 
 import time
@@ -12,7 +18,9 @@ from pathlib import Path
 
 from watchfiles import watch
 
+from dagwright.diff import diff_dc_plans
 from dagwright.loaders import SpecError
+from dagwright.state import DefinitionalChange
 
 
 def watch_command(args) -> int:
@@ -32,27 +40,37 @@ def watch_command(args) -> int:
         print(f"  - {p}", flush=True)
     print(flush=True)
 
-    _run_once(args, header="[initial run]")
+    state = _WatchState()
+    _run_once(args, state, header="[initial run]")
 
     try:
         for changes in watch(*str_paths):
             changed = sorted({Path(p).name for _, p in changes})
             header = f"[changed: {', '.join(changed)}]"
-            _run_once(args, header=header)
+            _run_once(args, state, header=header)
     except KeyboardInterrupt:
         print("\n[dagwright watch] stopped", flush=True)
         return 0
 
 
-def _run_once(args, header: str) -> None:
-    # Late import to avoid pulling planner machinery at module load
-    # (also keeps a circular-import door closed).
-    from dagwright.planner import plan_command
+class _WatchState:
+    """Holds the previous run's plans so diff can compare. Kept on
+    the stack of watch_command — does not persist across CLI
+    invocations."""
+
+    def __init__(self):
+        self.previous_plans: list = []
+        self.previous_spec_kind: type | None = None
+
+
+def _run_once(args, state: _WatchState, header: str) -> None:
+    # Late import to keep the module light at import time.
+    from dagwright.planner import run_plan, render_plan_output
 
     print(f"\n{header}", flush=True)
     t0 = time.perf_counter()
     try:
-        plan_command(args)
+        spec, plans, rejections = run_plan(args)
     except SpecError as e:
         elapsed_ms = (time.perf_counter() - t0) * 1000
         print(
@@ -69,13 +87,27 @@ def _run_once(args, header: str) -> None:
         return
     except Exception as e:
         # Catch-all so the watcher survives a transient error (e.g.
-        # YAML mid-edit) without exiting. Re-raises would defeat the
-        # iteration-loop UX.
+        # YAML mid-edit) without exiting.
         elapsed_ms = (time.perf_counter() - t0) * 1000
         print(
             f"\n[error] {type(e).__name__} after {elapsed_ms:.0f} ms: {e}\n",
             flush=True,
         )
         return
+
+    # Diff (if applicable). Only DefinitionalChange has a diff
+    # implementation in v0; metric_request plans pass through.
+    if isinstance(spec, DefinitionalChange) and isinstance(state.previous_spec_kind, type) and state.previous_spec_kind is DefinitionalChange:
+        diff_md = diff_dc_plans(state.previous_plans, plans)
+        if diff_md:
+            print("\n### Diff vs previous run\n", flush=True)
+            print(diff_md, flush=True)
+            print(flush=True)
+
+    render_plan_output(args, spec, plans, rejections)
+
     elapsed_ms = (time.perf_counter() - t0) * 1000
     print(f"\n[completed in {elapsed_ms:.0f} ms]\n", flush=True)
+
+    state.previous_plans = plans
+    state.previous_spec_kind = type(spec)

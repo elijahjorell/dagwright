@@ -47,6 +47,13 @@ they don't read YAML — they trust the LLM edit, see the resulting
 plan, and react. The spec persists in git for commit-time and
 post-mortem review, but during iteration nobody human looks at it.
 
+To make this work in practice, watch mode renders a **plan diff**
+between consecutive runs — what changed in the ranked plan list as
+a result of the latest spec edit. The AE didn't see the spec edit;
+they need the plan-side delta to connect "I asked for X" with
+"here's what got different in the plan" without reading two full
+plans side by side.
+
 **Bottleneck per iteration is the LLM edit (~5–15s, ~5–10K tokens),
 not dagwright (~20ms, 0 tokens).** The headline value isn't "1000×
 faster" — it's the split of labor: small targeted edits cost a
