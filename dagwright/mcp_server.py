@@ -12,10 +12,21 @@ Server-side state: a per-server-instance dict mapping spec_path to
 the previous run's plan list. When the same spec is planned twice,
 the response includes a diff vs the previous run. Reset on server
 restart.
+
+Hot-reload: each tool call mtime-checks dagwright's submodules
+(planner, diff, loaders, state) and reloads any that have changed
+since the last call. Lets the developer edit planner/diff logic and
+have the next tool call pick up changes without restarting the MCP
+server (i.e. without restarting Claude Code). Does NOT cover edits
+to this file itself or new tool registrations — those still need a
+real server restart.
 """
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,15 +34,55 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from dagwright.diff import diff_dc_plans
-from dagwright.loaders import SpecError, load_spec
-from dagwright.planner import run_plan
-from dagwright.state import DefinitionalChange, MetricRequest
-
 mcp = FastMCP("dagwright")
+
+# Modules whose mtimes we track for hot-reload. Order matters:
+# state and loaders have no internal deps; planner imports from
+# state and loaders; diff imports from planner. Reloading in this
+# order ensures dependents see freshly-reloaded dependencies.
+_RELOADABLE = ("dagwright.state", "dagwright.loaders", "dagwright.planner", "dagwright.diff")
+# Tracks (mtime_ns, size) per module path. Nanosecond mtime + size
+# is more robust than mtime-in-seconds alone — catches rapid
+# successive writes within the same second that still produce
+# different file contents.
+_module_stamps: dict[str, tuple[int, int]] = {}
+
+
+def _maybe_reload() -> None:
+    """Reload dagwright submodules whose source has changed since
+    the last call. Called at the top of each tool. Silent on
+    failure — a transient reload error shouldn't crash a tool call.
+    Lazy imports inside tool bodies pick up the freshly reloaded
+    module bindings."""
+    for name in _RELOADABLE:
+        mod = sys.modules.get(name)
+        path = getattr(mod, "__file__", None)
+        if mod is None or path is None:
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        stamp = (st.st_mtime_ns, st.st_size)
+        if _module_stamps.get(name) != stamp:
+            _module_stamps[name] = stamp
+            try:
+                # Belt-and-suspenders: clear finder caches so Python
+                # rechecks the filesystem rather than trusting any
+                # stale bytecode cache.
+                importlib.invalidate_caches()
+                importlib.reload(mod)
+            except Exception as e:
+                print(
+                    f"[dagwright mcp] reload failed for {name}: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 # Maps absolute spec_path → list of plans from the most recent
 # `plan` call on that spec. Used to compute diffs across calls.
+# Survives module reloads of planner/diff because mcp_server itself
+# is not in the reload set.
 _previous_plans: dict[str, list] = {}
 
 
@@ -60,6 +111,12 @@ def plan(
             on this spec_path. Empty string on the first call or for
             metric_request specs (diff not yet supported there).
     """
+    _maybe_reload()
+    # Lazy-import so we get whatever versions just got (re-)loaded.
+    from dagwright.planner import run_plan
+    from dagwright.diff import diff_dc_plans
+    from dagwright.state import DefinitionalChange
+
     spec_path_abs = str(Path(spec_path).resolve())
     args = SimpleNamespace(
         spec=Path(spec_path),
@@ -148,6 +205,10 @@ def validate_spec(spec_path: str) -> dict:
         errors: list of error message strings (empty when ok).
         spec_id: str | None — the spec's id when parseable.
     """
+    _maybe_reload()
+    from dagwright.loaders import SpecError, load_spec
+    from dagwright.state import DefinitionalChange, MetricRequest
+
     try:
         spec = load_spec(Path(spec_path))
     except SpecError as e:
