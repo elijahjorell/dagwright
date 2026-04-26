@@ -1,64 +1,95 @@
 # Primary metric
 
-**Number of executable plans the author would actually run, with the
-scope they exercise tracked alongside.**
+**Number of executable plans produced by dagwright that an AE
+actually used as the artifact for review, reuse, or audit — not as
+the source of richer thinking than they'd have produced anyway.**
 
-A plan counts as "executable" when:
+A plan counts as "executable + used" when:
 
 - The proposed changes are structurally sound
 - Reusable pathways are correctly identified
 - Contracts are preserved
 - Grain is correct
-- The author would copy the plan into a PR (or a sequence of PRs)
+- The author would copy the plan into a PR (or sequence of PRs)
   without major revision
+- **AND** the AE chose to run dagwright instead of (or alongside)
+  AE+LLM-as-prose because they wanted the artifact properties:
+  determinism, audit trail, bulk generation, CI integration, or
+  spec-driven iteration.
+
+The "and" clause is critical. April 25, 2026 established empirically
+that AE+LLM with the manifest in context produces plans of comparable
+or richer content than dagwright. Counting "the plan was correct" as
+the metric would over-credit dagwright for thinking that AE+LLM
+already does. The metric tracks adoption of the artifact layer.
 
 ## Scope levels
 
 One engine, more of it exercised at each level. The metric tracks
 the highest scope reached and how often.
 
-- **n=1 (single-spec).** Existing models pinned by the requirement;
-  plan adds one thing. Exercises the planner end-to-end but not its
-  distinctive value.
-- **multi-spec.** Two or more forward requirements within one
-  domain; plan must satisfy them coherently. Exercises preservation
-  under change and ranked alternatives.
+- **n=1 (single-spec).** One requirement against the manifest;
+  plan adds or modifies one thing.
+- **multi-spec.** Multiple forward requirements within one domain;
+  plan must satisfy them coherently.
 - **domain-scoped.** Domain spec includes contracts derived from
   real BI consumers; plan can restructure freely as long as
-  contracts hold. Exercises the full proposition.
+  contracts hold.
 
 ## Target trajectory
 
 - **April 30, 2026** — 1 single-spec plan on `jaffle_shop`. **Hit
   April 24, 2026.**
-- **June 30, 2026** — first multi-spec plan within one domain on
-  `jaffle_shop` or `jaffle_shop_modern`. Forward requirements include
-  at least one preservation-under-change case (e.g. a definitional
-  change or deprecation alongside a new metric).
-- **August 31, 2026** — first domain-scoped plan against a realistic
-  dbt project: at least one full domain in scope, at least one BI
-  consumer pinning contracts, plan judged executable.
-- **October 31, 2026** — at least one external AE has run a
-  domain-scoped plan on their own project.
+- **April 25, 2026** — first single-spec plan against a real-world
+  manifest (`mattermost-analytics`, 302 models, 12 in-tree
+  exposures). Plan judged executable. Validation of the
+  artifact-property thesis: ~20ms, 0 tokens, reproducible output.
+  **Hit.**
+- **June 30, 2026** — first multi-spec plan within one domain on a
+  real-world manifest. Forward requirements include at least one
+  preservation-under-change case.
+- **August 31, 2026** — first domain-scoped plan against a
+  realistic dbt project that an external AE has actually used.
+  External use is the validation that the artifact properties are
+  worth the integration cost.
 
 ## Current value
 
 | Date       | Highest scope reached | Notes |
 |------------|------------------------|-------|
 | 2026-04-18 | none                   | Charter written, no code yet. |
-| 2026-04-24 | n=1 (single-spec)      | `dagwright plan` produces ranked plans for `new_customers_monthly` against `jaffle_shop`. Plan 1 (parent=customers, grain via first_order) is executable: correct semantics, all engaged invariants hold, no existing-artifact risk. April 30 kill-criterion hit 6 days early. |
-| 2026-04-25 | n=1 (single-spec) on realistic project | `dagwright plan` produces four ranked plans for `dau_desktop_only` (definitional_change kind) against `mattermost-analytics` (302-model real-world manifest, 12 dbt exposures used as BI graph). Plans 1 (replace_in_place) and 2 (consumer_only) are both executable in their respective shapes. Surfaced three product gaps to file: downstream-dbt effects missing from blast radius, ranking undervalues consumer_only, versioned-mart edge typing still rough. Sits between the April n=1 milestone and the June multi-spec milestone — first time dagwright has been validated on a manifest at the charter's target scale. |
+| 2026-04-24 | n=1 (single-spec)      | `dagwright plan` produces ranked plans for `new_customers_monthly` against `jaffle_shop`. Plan 1 (parent=customers, grain via first_order) is executable. April 30 kill-criterion hit 6 days early. |
+| 2026-04-25 | n=1 (single-spec) on realistic project | `dagwright plan` produces four ranked plans for `dau_desktop_only` (definitional_change kind) against `mattermost-analytics` (302-model real-world manifest, 12 dbt exposures used as BI graph). Plans 1 (replace_in_place) and 2 (consumer_only) are both executable in their respective shapes. ~20ms, 0 tokens, reproducible output — validates the artifact-property thesis. Empirical comparison vs. AE+LLM-as-prose on the same task showed prose Claude produced richer plan content; reframed dagwright's value around artifact properties rather than intellectual quality. |
 
 ## Leading indicators (track when relevant)
 
-- Spec fields correctly filled by the LLM, vs. expected total.
-- Contract violations correctly detected in synthetic break tests.
-- Invariant violations correctly detected in synthetic break tests.
-- Plan runtime vs. manual planning time. If the tool takes longer
-  than doing it by hand, it isn't useful.
+The artifact-property pivot reshapes what to track alongside the
+primary metric:
+
+- **Latency.** Time from CLI invocation to JSON/markdown output.
+  Must stay sub-second for typical manifests. Floor:
+  ~milliseconds. Ceiling: 1 second.
+- **Token cost.** Must remain zero. Any future feature that calls
+  out to an LLM violates the cost story.
+- **Determinism check.** Same spec + same manifest run twice → byte-
+  identical output (or at minimum: same plan ordering, identical
+  operation lists, identical scores). Regression risk if not.
+- **Plan reuse.** How often plans are referenced *after* the
+  authoring run — in PRs, Slack, post-mortems, replay scripts. If
+  this is zero, the artifact isn't doing its job.
+- **Spec authoring cost.** Time and tokens an LLM spends turning a
+  natural-language stakeholder note into a valid dagwright-spec.
+  Must stay below what one round-trip of LLM plan generation would
+  cost; otherwise the layer is net-negative.
+- **Sweep capability.** Largest N specs run in one batch (`dagwright
+  sweep` or equivalent). When implemented, this is a use case
+  AE+LLM-as-prose can't realistically replicate.
 
 ## Kill-criteria-linked signal
 
-If no multi-spec plan is executable by June 30, 2026, this is a
-sprawl/scope signal, not a timing issue. Revisit `CHARTER.md`
-before writing more code.
+If by August 2026 no external user has run dagwright in CI or on
+their own real dbt project, and no convincing use case has emerged
+that exploits the artifact properties (CI gates, bulk planning,
+replay), the artifact layer isn't pulling its weight. Revisit
+`CHARTER.md` and consider whether the project should rescope
+toward a different layer of the AE+LLM stack — or stop.

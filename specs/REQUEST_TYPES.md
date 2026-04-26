@@ -98,8 +98,14 @@ distinctive value.
 
 ## Charter alignment
 
-`CHARTER.md` scopes the dagwright-spec as a domain spec containing
-scope, contracts to preserve, and a set of forward requirements.
-Each forward requirement uses one of the kinds catalogued above.
-v0 implements `metric_request`-shaped requirements only; broader
-kinds earn implementation as fixtures demand them.
+`CHARTER.md` (artifact-property revision) frames dagwright as a
+deterministic, fast, free planning-artifact layer rather than a
+domain-scoped reasoning engine. The dagwright-spec remains the input
+to that layer. Each spec belongs to one of the kinds catalogued
+above; the kinds describe *what stakeholders ask for*, not what
+shape dagwright "wants." v0 implements `metric_request` and
+`definitional_change`. Broader kinds earn implementation when a
+fixture demands them — but only if the kind benefits from the
+artifact-property thesis (deterministic, structured, fast, free)
+rather than purely from richer reasoning, which AE+LLM already
+provides.

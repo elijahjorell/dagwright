@@ -7,192 +7,185 @@ don't make the change.
 
 ## Problem (one paragraph)
 
-Analytics DAGs in mature data stacks decay as they grow. The data
-function — supposed to be a force multiplier — turns into overhead:
-numbers don't tie across the org, changes break things silently, every
-new request takes longer than the last, refactors are impossible
-because nobody can tell what depends on what, and stakeholders route
-around the data team. The root cause is that **architectural decisions
-in analytics DAGs have no separate medium.** A dbt model is
-simultaneously code that runs and structure that constrains everything
-downstream — they're the same artifact. So architectural choices
-happen implicitly, in the act of writing SQL, by whoever's on the
-ticket, with no place where alternatives get compared, contracts get
-checked, or downstream impact gets surfaced. Each PR is an
-architectural commitment masquerading as a feature. Over time the DAG
-accretes choices nobody made deliberately.
+When an analytics engineer plans a DAG change today, the planning
+happens — but it doesn't survive. AE+LLM workflows produce plans as
+prose in chat sessions, in PR descriptions, in Slack threads. Those
+plans aren't reproducible (same prompt twice → different plans), aren't
+reviewable as artifacts separate from the SQL they produce, can't be
+diffed when the underlying DAG changes, and can't be generated at
+scale (cost and latency scale linearly per plan against the LLM). The
+thinking is fine; the persistence is the problem.
 
 ## Aim (one sentence)
 
-Given a **domain** within an analytics DAG — its in-scope models, the
-contracts and consumers that must be preserved, and the requirements
-it must satisfy — produce a ranked set of architectural plans that
-satisfy the requirements while preserving the contracts, and return
-them to the AE + AI to execute.
+Convert AE+LLM-style architectural change planning into a
+**deterministic, structured, fast, free artifact layer** — the same
+thinking, captured as data that's reproducible, reviewable, diff-able,
+and cheap enough to run at scale.
 
-## Why "domain" is the unit
+## What dagwright is *not*
 
-Domains (customer, revenue, marketing, product, etc.) are how AEs
-already partition mature DAGs. The domain is the boundary at which:
+Empirically validated April 25, 2026: a fresh Claude given the
+Mattermost manifest and a real stakeholder note produced an
+objectively richer plan than dagwright did — broader alternatives,
+deeper semantic awareness, framing pushback dagwright structurally
+can't model. The intellectual content is *not* the differentiator.
+Therefore:
 
-- One AE typically owns the work.
-- Consumer-side requirements are coherently enumerable (a finite list
-  of dashboards and queries, not the whole org).
-- Cleanup can happen without org-wide coordination.
+- **Not a replacement for AE+LLM thinking.** AE+Claude with the
+  manifest in context out-thinks dagwright on plan content.
+- **Not a forcing function for considering things.** The spec
+  doesn't make AEs think about blast radius or alternatives — they
+  already do. The spec records what they thought.
+- **Not a "better-plans" engine.** Don't sell it as one; the
+  empirical result won't back the claim.
 
-The full-DAG case is too large to plan as a unit; the single-PR case
-is too small to surface dagwright's distinctive value (alternatives,
-blast radius, contract preservation under change). The domain is the
-smallest unit where the architectural-decision step is non-trivial,
-and the largest unit where a single AE can execute the result.
+## What dagwright is
 
-## One mode, varying scale
+The artifact layer that AE+LLM workflows lack. Specifically:
 
-There is one operation: **plan**. Inputs are a dagwright-spec
-describing a domain (scope, contracts to preserve, forward
-requirements) and the existing DAG state (manifest + BI consumer
-graph). The planner ranks plans that satisfy the forward requirements
-while preserving the contracts.
+- **Deterministic.** Same spec + same manifest = same ranked plans
+  every time, for everyone. Two AEs running the same spec converge
+  on the same output.
+- **Structured.** Plans are data (JSON / markdown), not prose.
+  Diff-able, queryable, programmatically composable.
+- **Fast.** Plans run in milliseconds. Mattermost (302 models, 6MB
+  manifest): ~20ms.
+- **Free.** Zero LLM tokens per plan. Cost scales with manifest
+  size, not plan count.
 
-Two ends of a spectrum, same engine:
+## Use cases the artifact layer unlocks
 
-- **Smallest case (n=1).** Forward requirements = current outputs
-  plus one new thing. Existing models pinned by the requirements stay
-  as-is; the planner proposes minimal additions. This is the shipped
-  v0 case (`metric_request` against `jaffle_shop`).
-- **Largest case (rebuild).** Forward requirements describe only what
-  the domain must support, not constrained to current models. The
-  planner can freely restructure the domain as long as contracts
-  hold.
+The properties above unlock workflows AE+LLM-as-prose can't reach:
 
-Most real use is between these. The same engine handles all of it;
-what changes is how much of the existing structure the requirements
-pin in place.
+- **CI gates.** `dagwright check` on every PR — pass/fail on
+  declared contracts. Sub-second; zero token cost. LLM-in-CI is
+  operationally and financially unattractive.
+- **Bulk analysis.** Generate plans across a parameter sweep ("what
+  if every 'active' metric became desktop-only"). Seconds for
+  hundreds of plans; would be hours and meaningful dollars via LLM.
+- **Iteration loops.** AE tweaks the spec, sees plans update in
+  milliseconds. Different qualitative experience from waiting 1–2
+  minutes per try.
+- **Historical replay.** Re-run last year's specs against today's
+  manifest. See what plans changed because the DAG changed
+  underneath. Free.
+- **Audit.** Plans persist as artifacts referenceable from PRs,
+  Slack, post-mortems. The decision history survives the moment of
+  authorship.
 
 ## Problem (preflight)
 
-1. **Who.** Senior / staff AEs at Series B–D companies with >200 dbt
-   models, owning one domain (customer, revenue, marketing, product,
-   etc.) within a larger analytics stack. Starting user: the author,
-   dogfooding against OSS dbt projects and personal data (eventual
-   plaid-finance-as-dbt). The acute pain is debt the AE has inherited
-   in their domain, alongside the need to keep delivering against it.
+1. **Who.** Analytics engineers in dbt-using orgs at any scale who
+   already work with LLM assistants (Claude Code, Cursor, etc).
+   Acute pain: plans live in disposable chat sessions; nothing
+   survives the moment of authorship in a reusable form.
 
-2. **Current workaround.** Manual planning in notebooks or PRDs,
-   Claude-in-plan-mode reading the dbt project, or one-PR-at-a-time
-   incremental healing. All fail to enumerate alternatives, check
-   contracts, or surface blast radius. None give the architectural
-   step its own artifact, so decisions remain implicit and the domain
-   continues to decay.
+2. **Current workaround.** AE+LLM produces plans as prose in chat.
+   AE pastes the relevant bits into a PR description. Plan vanishes
+   when the PR merges. Cannot be replayed, diffed, or run at scale.
 
-3. **If taken away.** AEs revert to manual planning + Claude.
-   Adequate for individual changes; debt continues to accumulate;
-   cleanup remains intractable at the domain scale.
+3. **If taken away.** AEs continue using AE+LLM as today —
+   thinking still happens, persistence still doesn't.
 
-4. **How they find it.** OSS release on GitHub; Show HN post; dbt
-   package index listing; eventual integration in common AE tooling
-   (Claude Code subagent profiles, dbt Cloud plugin, etc.).
+4. **How they find it.** OSS release on GitHub; integration points
+   (Claude Code subagents, dbt Cloud plugin); CI gates that
+   substitute for PR-time review costs.
 
 5. **Metric that means it works.** See `METRIC.md`.
 
 ## What's in scope (v0)
 
-- Ingest `dbt manifest.json`.
-- Ingest one BI tool's consumer graph. Start with Metabase (open
-  source, accessible API). One, not N.
-- Accept a dagwright-spec (YAML) describing the domain: in-scope
-  models, contracts to preserve, and forward requirements. Each
-  forward requirement uses a `kind` from `specs/REQUEST_TYPES.md`;
-  v0 implements `metric_request`-shaped requirements only.
-- v0 expects the domain spec to be hand-authored (with LLM help).
-  Auto-extraction of domain boundaries or contracts from a real DAG
-  is the load-bearing v1 problem.
-- Expect an LLM to be in the loop on the caller side to fill spec
-  fields from AE context (notes, ticket, stakeholder request, dbt +
-  BI exploration).
+- Ingest dbt `manifest.json`. Read in-tree dbt exposures as the BI
+  consumer graph by default; optional `--bi` for separate exports.
+- Accept a dagwright-spec (YAML) describing a change. v0 supports
+  `metric_request` and `definitional_change`. Broader kinds in
+  `specs/REQUEST_TYPES.md` earn implementation per fixture.
 - Deterministic planner produces ranked plans. A plan is an ordered
-  sequence of operations from `catalog/operations.yaml` — add /
-  remove / rewire nodes and edges, rename, change grain /
-  materialization / layer, add or modify tests, add or update
-  contracts, and so on; the full vocabulary, not just "add a model."
-  Each plan is annotated with:
-  - operations to apply, in order
-  - existing pathways reused vs. new construction
-  - contracts affected (preserved, broken, newly required)
-  - invariant check results (which rules hold after the plan applies)
-  - downstream impact (models and BI-tool consumers affected)
-  - estimated effort / complexity
-  - tradeoffs vs. alternative plans
+  sequence of operations from `catalog/operations.yaml`. Each plan
+  is annotated with operations, contracts (preserved / broken /
+  newly required), invariant checks, blast radius (BI consumers +
+  dbt downstream models), effort, tradeoffs.
 - Output: JSON (machine-readable) + markdown (human-readable).
-- Distribution: CLI tool. `dagwright plan --spec <domain>.yaml --manifest target/manifest.json [--bi metabase.json]`.
+  Both stable across runs given identical inputs.
+- CLI tool. `dagwright plan --spec foo.yaml --manifest target/manifest.json`.
 
 ## What's out of scope (v0)
 
-- **Full-DAG rebuild.** Domains, not the whole project.
-- **Auto-extraction of domain boundaries or contracts** from a real
-  DAG. v0 expects the AE to author them (with LLM help).
-- **Cross-domain refactors as a first-class feature.** Edges that
-  cross domain boundaries are inputs/outputs, not things dagwright
-  re-plans.
-- Executing plans. The tool emits plans; LLM + human execute.
-- Running SQL or touching data.
-- Standalone NL-to-spec without LLM assistance. The LLM is assumed.
-- A UI. CLI only.
-- Streaming / real-time.
-- Non-dbt transformation layers.
-- Multiple BI tools simultaneously.
-- Multi-repo orchestration.
-- Warehouse-specific optimizations (Snowflake tuning, BigQuery slots,
-  etc.).
+- **Outperforming AE+LLM intellectually.** Dagwright doesn't promise
+  richer plans, broader alternatives, or deeper semantic analysis.
+  AE+LLM with the manifest in context already does that well.
+- **Replacing the LLM.** Spec authoring (NL → spec) and plan
+  interpretation (plan → SQL) remain LLM tasks. Dagwright is the
+  middle layer.
+- **Executing plans.** Tool emits plans; LLM + human execute.
+- **Running SQL or touching data.**
+- **Standalone NL-to-spec without LLM assistance.**
+- **A UI.** CLI only.
+- **Streaming / real-time.**
+- **Non-dbt transformation layers.**
+- **Multiple BI tools simultaneously.**
+- **Multi-repo orchestration.**
+- **Warehouse-specific optimizations.**
 
 ## Boundaries to protect against sprawl
 
-- The planner **reads** existing state (domain spec, manifest, BI
-  graph) and **emits** plans. It does not build DAGs, mutate
-  manifests, validate generated SQL, or extract anything from
-  upstream sources beyond what's declared in inputs.
+- The planner reads existing state and emits plans. It does not
+  build DAGs, mutate manifests, validate generated SQL, or call
+  external LLMs.
 - Rule and invariant definitions live in `catalog/` and are treated
   as data, not code. The engine (rule evaluation, plan ranking, and
-  the eventual Z3 encoding) is implemented in this repo. The catalog
-  is the source of truth for *what* the rules are; the engine is the
-  source of truth for *how* to execute them.
-- New inputs require justification. The accepted inputs are: dbt
-  manifest, BI-tool consumer graph, dagwright-spec (domain spec).
-  Anything else (dbt sources, SQL linting, lineage tools) is
-  deferred until a concrete planning use case demands it.
-- The dagwright-spec may grow as needed for correctness, but every
-  new field must have a concrete planning use case — no fields
-  "just in case."
-- New file types / config formats / DSLs require justification.
+  the eventual Z3 encoding) is implemented in this repo.
+- New inputs require justification. v0 inputs are: dbt manifest, BI
+  consumer graph (or in-tree exposures), dagwright-spec.
+- Spec fields may grow as needed for correctness — never "just in
+  case." Each new field has to earn its place against the
+  artifact-property thesis: does it make the artifact more useful
+  to consumers downstream?
+- **Performance budget.** Plan generation must stay under 1 second
+  for typical inputs (200–500 model manifests). Token cost must
+  stay zero. If a feature would push past either, it pays the
+  budget cost in justification.
+
+## Domain framing (still useful, no longer the headline)
+
+Earlier charter revisions led with "domain is the unit of work."
+That's still true — domains are how AEs partition mature DAGs, the
+boundary at which one AE owns the work and consumer requirements are
+enumerable. The domain envelope (multi-spec input, BI-graph derived
+contracts, bundled plan output) is still on the roadmap. But it's
+secondary to the artifact-property thesis: dagwright's value is in
+*how* it produces plans (deterministic, fast, free, structured), not
+*what unit* the plans address. Domains scope the input neatly;
+artifact properties are why dagwright exists.
 
 ## Kill criteria
 
 The project stops or rescopes if any of these become true:
 
 - **April 30, 2026.** `dagwright plan` cannot produce a useful plan
-  on `jaffle_shop` given a simple spec. (Useful = the author would
-  execute the plan.) **HIT April 24, 2026.**
-- **July 31, 2026.** `dagwright plan` cannot produce a useful
-  multi-spec plan within a single domain. (Useful = the author would
-  execute the plan as a sequence of PRs.) Multi-spec = at least two
-  forward requirements satisfied coherently against shared scope.
-- **September 30, 2026.** `dagwright plan` cannot produce a useful
-  domain-scoped plan against a realistic dbt project. Domain-scoped
-  = full domain in scope, contracts derived from at least one BI
-  consumer, plan judged executable.
-- **November 2026.** No one except the author has run a
-  domain-scoped plan on a real dbt project.
-- The unified DAG state (dbt + BI) proves unreliable to construct
-  from multi-tool inputs. Fallback: dbt-only v0, revisit BI in v1.
-  If dbt-only also fails by September, stop.
-- The dagwright-spec grows so large that an LLM cannot reliably fill
-  it from typical AE context. Means the decomposition is wrong.
-- Three consecutive weeks with zero commits after the first
-  domain-scoped plan ships.
+  on `jaffle_shop` given a simple spec. **HIT April 24, 2026.**
+- **June 30, 2026.** Cannot produce plans against a real-world
+  manifest (`mattermost-analytics`-shape, 200+ models) at sub-
+  second latency, zero token cost, with deterministic output.
+  This validates the differentiating claim. **HIT April 25, 2026**
+  — Mattermost (302 models, 6MB manifest): ~20ms, 0 tokens, output
+  reproducible.
+- **August 31, 2026.** No external user has run dagwright in CI or
+  on their own real dbt project, and no convincing use case has
+  emerged that exploits the artifact properties (CI gates, bulk
+  planning, replay). If after four months of artifact-property
+  positioning nobody has wired dagwright into a workflow that uses
+  those properties, the layer isn't pulling its weight.
+- **The artifact-property thesis fails empirically.** AE+LLM
+  workflows route around dagwright because the spec authoring step
+  costs more than the artifact properties save. Spec-fill cost
+  must remain less than what one round-trip of LLM plan generation
+  would cost; otherwise the layer is net-negative.
+- Three consecutive weeks with zero commits.
 
 ## Related repos
 
-- `~/ai-lab/` — research lab; findings inform dagwright's design
-  (spec-layer decisions, LLM placement).
+- `~/ai-lab/` — research lab; findings inform dagwright's design.
 - `~/plaid-finance/` — potential personal test-bed dbt project once
   the Beancount ledger is ported to dbt on DuckDB.
