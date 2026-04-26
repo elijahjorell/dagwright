@@ -18,6 +18,13 @@ class Node:
     # Per-column descriptions sourced from dbt .yml docs. Used for
     # heuristic date-column detection when data_type is not declared.
     column_descriptions: dict[str, str] = field(default_factory=dict)
+    # Per-output-column upstream column refs extracted from the model's
+    # raw SQL (`<src> AS <dst>` patterns). Maps output column name to a
+    # list of (upstream_node_name, upstream_col_name). Empty when the
+    # model has no aliases, ambiguous attribution (multi-source), or
+    # SQL the regex can't parse — in which case the planner falls back
+    # to literal name matching for those columns.
+    column_lineage: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,33 @@ class Edge:
 class DagState:
     nodes: dict[str, Node]
     edges: tuple[Edge, ...]
+    # (node_name, col) → frozenset of (node_name, col) known to be the same
+    # data across the DAG via alias chains. Built from per-node
+    # ``column_lineage``. The planner consults this when literal name
+    # matching of a required column fails — a parent that exposes a
+    # synonymous column under a different name is still a valid candidate
+    # (with an alias note in the plan).
+    column_synonyms: dict[tuple[str, str], frozenset[tuple[str, str]]] = field(
+        default_factory=dict
+    )
+
+    def aliases_of(self, node: str, col: str) -> frozenset[str]:
+        """Set of column names this (node, col) is known by elsewhere
+        in the DAG via aliasing. Includes ``col`` itself."""
+        component = self.column_synonyms.get((node, col), frozenset({(node, col)}))
+        return frozenset(c for (_, c) in component)
+
+    def synonym_match(self, node: str, requested_col: str) -> str | None:
+        """If the parent at ``node`` has any column synonymous with
+        ``requested_col``, return the parent's column name. Used by the
+        planner to accept alias hits when literal matching fails."""
+        n = self.nodes.get(node)
+        if not n or requested_col in n.schema:
+            return None  # caller should handle direct hits separately
+        for x in n.schema:
+            if requested_col in self.aliases_of(node, x):
+                return x
+        return None
 
     def parents_of(self, child: str) -> tuple[str, ...]:
         return tuple(e.parent for e in self.edges if e.child == child)

@@ -172,22 +172,52 @@ def plan_metric_request(
         if node.layer not in ELIGIBLE_PARENT_LAYERS:
             continue
 
-        # All structured measure columns must have their source column
-        # present in the parent's declared schema (strict mode; see
-        # PLANNER_NOTES.md boundary #4). expr-form columns are skipped
-        # — the planner does not parse SQL.
-        missing = [c for c in required_source_columns if c not in node.schema]
-        if missing:
+        # All structured measure columns must resolve to a column on the
+        # parent — directly (literal name match against declared schema)
+        # or via the column-lineage synonym index (parent exposes the
+        # same data under a different name; see column_lineage.py).
+        # expr-form columns are skipped — the planner does not parse SQL.
+        column_resolutions: dict[str, str] = {}  # spec_col → parent_col
+        alias_notes: list[str] = []
+        unresolved: list[str] = []
+        for c in required_source_columns:
+            if c in node.schema:
+                column_resolutions[c] = c
+                continue
+            aliased = dag.synonym_match(parent_name, c)
+            if aliased:
+                column_resolutions[c] = aliased
+                alias_notes.append(
+                    f"Spec column '{c}' resolves to {parent_name}.{aliased} "
+                    f"via DAG alias chain. SQL renders against the parent's "
+                    f"actual column name; the spec is unchanged."
+                )
+            else:
+                unresolved.append(c)
+
+        if unresolved:
             rejections.append(
                 Rejection(
                     candidate_parent=parent_name,
                     candidate_source_columns=[],
                     reason=(
-                        f"declared schema lacks measure column(s) {missing}"
+                        f"declared schema lacks measure column(s) {unresolved}"
+                        + (
+                            f" (no synonym match either; the lineage index "
+                            f"sees no aliasing path from this parent's "
+                            f"columns to {unresolved})"
+                            if alias_notes else ""
+                        )
                     ),
                 )
             )
             continue
+
+        # If any measure column resolved via alias, build a per-parent
+        # spec view where MeasureColumn.column has been substituted to
+        # the parent's actual column name. Plans for this parent then
+        # render against the real column name.
+        spec_for_parent = _spec_with_resolutions(spec, column_resolutions)
 
         resolution_combos = enumerate_grain_resolutions(node, spec.output_shape.grain.keys)
         if not resolution_combos:
@@ -206,12 +236,39 @@ def plan_metric_request(
 
         for combo in resolution_combos:
             if dense_keys:
-                plan = build_dense_plan(dag, cg, spec, parent_name, combo, dense_keys[0])
+                plan = build_dense_plan(dag, cg, spec_for_parent, parent_name, combo, dense_keys[0])
             else:
-                plan = build_plan(dag, cg, spec, parent_name, combo)
+                plan = build_plan(dag, cg, spec_for_parent, parent_name, combo)
+            if alias_notes:
+                plan.notes.extend(alias_notes)
             plans.append(plan)
 
     return plans, rejections
+
+
+def _spec_with_resolutions(
+    spec: MetricRequest, column_resolutions: dict[str, str]
+) -> MetricRequest:
+    """Return a copy of ``spec`` where every structured MeasureColumn's
+    ``column`` field has been replaced by the parent-actual name from
+    ``column_resolutions``. No-op when every requested column resolves
+    to itself (the common case)."""
+    from dataclasses import replace
+    needs_substitution = any(
+        col.is_structured and col.column and column_resolutions.get(col.column, col.column) != col.column
+        for col in spec.output_shape.columns
+    )
+    if not needs_substitution:
+        return spec
+    new_cols = tuple(
+        replace(col, column=column_resolutions[col.column])
+        if col.is_structured and col.column and col.column in column_resolutions
+        and column_resolutions[col.column] != col.column
+        else col
+        for col in spec.output_shape.columns
+    )
+    new_shape = replace(spec.output_shape, columns=new_cols)
+    return replace(spec, output_shape=new_shape)
 
 
 def _dense_grain_keys(spec: MetricRequest) -> list[str]:

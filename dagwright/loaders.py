@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from dagwright.column_lineage import attribute_aliases, extract_aliases
 from dagwright.state import (
     Artifact,
     Consumer,
@@ -72,6 +73,21 @@ def load_manifest(path: Path) -> DagState:
         descs = {c: (info.get("description") or "") for c, info in cols.items()}
         grain = tuple(unique_columns.get(key, []))
         materialization = (n.get("config") or {}).get("materialized") or rt
+
+        # Per-output-column upstream refs from raw SQL aliases. Only
+        # attributable when the model has exactly one upstream model or
+        # source; multi-source attribution requires a real SQL parser
+        # and is left empty (literal name matching takes over).
+        depends_on_keys = (n.get("depends_on") or {}).get("nodes", [])
+        upstream_names = [
+            _key_to_name(k) for k in depends_on_keys
+            if k.startswith(("model.", "source.", "seed."))
+        ]
+        upstream_names = [u for u in upstream_names if u]
+        raw_code = n.get("compiled_code") or n.get("raw_code") or ""
+        aliases = extract_aliases(raw_code)
+        column_lineage = attribute_aliases(aliases, upstream_names)
+
         nodes[name] = Node(
             name=name,
             layer=layer,
@@ -79,8 +95,9 @@ def load_manifest(path: Path) -> DagState:
             schema=schema,
             materialization=materialization,
             column_descriptions=descs,
+            column_lineage=column_lineage,
         )
-        for parent_key in (n.get("depends_on") or {}).get("nodes", []):
+        for parent_key in depends_on_keys:
             parent_name = _key_to_name(parent_key)
             if parent_name:
                 edges.append(Edge(parent=parent_name, child=name))
@@ -96,7 +113,89 @@ def load_manifest(path: Path) -> DagState:
             materialization="source",
         )
 
-    return DagState(nodes=nodes, edges=tuple(edges))
+    column_synonyms = _build_column_synonyms(nodes, edges)
+
+    return DagState(
+        nodes=nodes, edges=tuple(edges), column_synonyms=column_synonyms
+    )
+
+
+def _build_column_synonyms(
+    nodes: dict[str, Node],
+    edges: list[Edge] | tuple[Edge, ...],
+) -> dict[tuple[str, str], frozenset[tuple[str, str]]]:
+    """Compute connected components over the column-lineage graph: every
+    (node, col) reachable from another via aliasing ends up in the same
+    component. Singletons (documented columns with no aliases) are
+    included so the lookup never returns ``None``.
+
+    Two sources of edges:
+
+    1. **Explicit aliases** from each model's ``column_lineage``
+       (regex-extracted ``<src> AS <dst>`` patterns).
+    2. **Passthrough heuristic**: when a child node and one of its
+       upstream parents both have the same column name in their
+       declared schema, treat them as the same data. This covers the
+       common pattern where a downstream model selects a column without
+       aliasing it. Over-unions in the rare case where the same name
+       means different things across an edge — acceptable v0 trade-off,
+       documented in PLANNER_NOTES.md.
+    """
+    parent: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def find(x: tuple[str, str]) -> tuple[str, str]:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: tuple[str, str], b: tuple[str, str]) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Seed every documented column as its own component.
+    for node_name, node in nodes.items():
+        for col in node.schema:
+            key = (node_name, col)
+            parent.setdefault(key, key)
+
+    # Edges from explicit aliases.
+    for node_name, node in nodes.items():
+        for output_col, refs in node.column_lineage.items():
+            out_key = (node_name, output_col)
+            parent.setdefault(out_key, out_key)
+            for up_node, up_col in refs:
+                up_key = (up_node, up_col)
+                parent.setdefault(up_key, up_key)
+                union(out_key, up_key)
+
+    # Passthrough heuristic: same-named columns across a parent-child
+    # edge are treated as the same data.
+    parents_of_child: dict[str, list[str]] = {}
+    for e in edges:
+        parents_of_child.setdefault(e.child, []).append(e.parent)
+
+    for child_name, child_node in nodes.items():
+        child_cols = set(child_node.schema)
+        for p_name in parents_of_child.get(child_name, ()):
+            p = nodes.get(p_name)
+            if p is None:
+                continue
+            shared = child_cols & set(p.schema)
+            for col in shared:
+                union((child_name, col), (p_name, col))
+
+    components: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for k in parent:
+        components.setdefault(find(k), set()).add(k)
+
+    out: dict[tuple[str, str], frozenset[tuple[str, str]]] = {}
+    for members in components.values():
+        frozen = frozenset(members)
+        for m in members:
+            out[m] = frozen
+    return out
 
 
 def _infer_layer(resource_type: str, file_path: str) -> str:
