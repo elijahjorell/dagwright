@@ -24,6 +24,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from dagwright.diff import diff_dc_plans
+from dagwright.loaders import SpecError, load_spec
 from dagwright.planner import run_plan
 from dagwright.state import DefinitionalChange, MetricRequest
 
@@ -81,6 +82,108 @@ def plan(
         "plans": [_to_jsonable(p) for p in plans],
         "rejections": [_to_jsonable(r) for r in rejections],
         "diff": diff_md,
+    }
+
+
+@mcp.tool()
+def discover_specs(root_path: str) -> list[dict]:
+    """Find dagwright specs under `root_path`. Walks the directory
+    tree, looks at every .yaml / .yml file, returns those that have
+    a recognised top-level `kind` field (`metric_request`,
+    `definitional_change`, `domain`).
+
+    Returns a list of dicts: {spec_path, kind, id, intent_excerpt}.
+    The AE doesn't have to remember spec paths — the LLM finds them.
+    """
+    import yaml
+
+    out: list[dict] = []
+    root = Path(root_path)
+    if not root.exists():
+        return [{"error": f"path does not exist: {root_path}"}]
+
+    recognised_kinds = {"metric_request", "definitional_change", "domain"}
+    for p in root.rglob("*.yaml"):
+        out.extend(_scan_one(p, recognised_kinds))
+    for p in root.rglob("*.yml"):
+        out.extend(_scan_one(p, recognised_kinds))
+    out.sort(key=lambda x: x.get("spec_path", ""))
+    return out
+
+
+def _scan_one(path: Path, recognised_kinds: set[str]) -> list[dict]:
+    import yaml
+
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    kind = raw.get("kind")
+    if kind not in recognised_kinds:
+        return []
+    intent = raw.get("intent") or ""
+    if isinstance(intent, str):
+        excerpt = intent.strip().split("\n")[0][:200]
+    else:
+        excerpt = ""
+    return [{
+        "spec_path": str(path).replace("\\", "/"),
+        "kind": kind,
+        "id": raw.get("id"),
+        "intent_excerpt": excerpt,
+    }]
+
+
+@mcp.tool()
+def validate_spec(spec_path: str) -> dict:
+    """Check whether a dagwright spec at `spec_path` parses cleanly.
+
+    Use this between an LLM-driven spec edit and a `plan` call so
+    the LLM can self-correct an invalid edit before the planner sees
+    it. Returns:
+        ok: bool — True iff the spec parsed successfully.
+        spec_kind: "metric_request" | "definitional_change" | None
+        errors: list of error message strings (empty when ok).
+        spec_id: str | None — the spec's id when parseable.
+    """
+    try:
+        spec = load_spec(Path(spec_path))
+    except SpecError as e:
+        return {
+            "ok": False,
+            "spec_kind": None,
+            "errors": [str(e)],
+            "spec_id": None,
+        }
+    except FileNotFoundError as e:
+        return {
+            "ok": False,
+            "spec_kind": None,
+            "errors": [f"file not found: {e}"],
+            "spec_id": None,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "spec_kind": None,
+            "errors": [f"{type(e).__name__}: {e}"],
+            "spec_id": None,
+        }
+
+    if isinstance(spec, MetricRequest):
+        kind = "metric_request"
+    elif isinstance(spec, DefinitionalChange):
+        kind = "definitional_change"
+    else:
+        kind = type(spec).__name__
+
+    return {
+        "ok": True,
+        "spec_kind": kind,
+        "errors": [],
+        "spec_id": getattr(spec, "id", None),
     }
 
 

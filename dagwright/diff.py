@@ -13,7 +13,9 @@ resolution); diffing those is a follow-up.
 
 from __future__ import annotations
 
-from dagwright.planner import DefinitionalChangePlan
+import json
+
+from dagwright.planner import DefinitionalChangePlan, Operation
 
 
 def diff_dc_plans(
@@ -78,7 +80,7 @@ def diff_dc_plans(
             )
             found = True
 
-        # Contract status flips (held boolean changes).
+        # Contract status: held flips, note shifts, adds/removes.
         prev_held = {c.contract_id: (c.held, c.note) for c in prev_plan.contract_status}
         curr_held = {c.contract_id: (c.held, c.note) for c in curr_plan.contract_status}
         for cid in sorted(set(prev_held) | set(curr_held)):
@@ -94,6 +96,33 @@ def diff_dc_plans(
                 old = "OK" if prev_h[0] else "FAIL"
                 new = "OK" if curr_h[0] else "FAIL"
                 lines.append(f"- `{shape}` contract `{cid}`: [{old} → {new}]")
+                found = True
+            elif prev_h[1] != curr_h[1]:
+                # Held bool unchanged but note text shifted —
+                # surfaces semantic context that explains *why* ops
+                # or scores moved (e.g., consumer dropped from
+                # must_migrate so its note flips even though held=True).
+                lines.append(
+                    f"- `{shape}` contract `{cid}`: note shifted "
+                    f"({_summarize_note_shift(prev_h[1], curr_h[1])})"
+                )
+                found = True
+
+        # Operations-list diff. Compare ordered ops as JSON
+        # signatures. Adds/removes are surfaced; modifications show
+        # up as a remove + add pair (acceptable noise for v0).
+        prev_op_sigs = {_op_signature(o): o for o in prev_plan.operations}
+        curr_op_sigs = {_op_signature(o): o for o in curr_plan.operations}
+        for sig in sorted(set(prev_op_sigs) | set(curr_op_sigs)):
+            if sig in prev_op_sigs and sig not in curr_op_sigs:
+                lines.append(
+                    f"- `{shape}` op removed: {_op_one_line(prev_op_sigs[sig])}"
+                )
+                found = True
+            elif sig in curr_op_sigs and sig not in prev_op_sigs:
+                lines.append(
+                    f"- `{shape}` op added: {_op_one_line(curr_op_sigs[sig])}"
+                )
                 found = True
 
         # Downstream dbt model adds/removes.
@@ -119,3 +148,64 @@ def diff_dc_plans(
 def p_rank(by_shape: dict, shape: str) -> int:
     """1-indexed rank for a shape in a by-shape dict (i, plan)."""
     return by_shape[shape][0] + 1
+
+
+def _op_signature(op: Operation) -> str:
+    """Canonical JSON form of an operation, suitable as a hashable
+    fingerprint for diff. sort_keys=True so arg ordering doesn't
+    cause spurious diffs."""
+    return json.dumps({"op": op.op, "args": op.args}, sort_keys=True, default=str)
+
+
+def _summarize_note_shift(old_note: str, new_note: str) -> str:
+    """Short paraphrase of a contract note change. Maps the
+    structured prefixes the contract evaluator emits to compact
+    descriptions; falls back to a generic 'note text changed' marker."""
+    old_kind = _classify_note(old_note)
+    new_kind = _classify_note(new_note)
+    if old_kind != new_kind:
+        return f"{old_kind} → {new_kind}"
+    return "note text changed"
+
+
+_NOTE_PATTERNS = [
+    ("MODEL-LEVEL must_migrate", "MODEL-LEVEL dependency; consumer is in must_migrate"),
+    ("MODEL-LEVEL upstream-redefined", "MODEL-LEVEL dependency; verify whether the consumer's reads"),
+    ("MODEL-LEVEL not-flagged", "MODEL-LEVEL dependency; consumer reads"),
+    ("must_migrate repointed", "must_migrate consumer repointed"),
+    ("must_migrate flows-through", "must_migrate consumer reads the redefined column"),
+    ("must_migrate broken", "must_migrate consumer's read still points to the old"),
+    ("non-must SEMANTIC RISK", "SEMANTIC RISK"),
+    ("non-must preserved", "old definition preserved at the original"),
+    ("outside change scope", "outside change scope"),
+]
+
+
+def _classify_note(note: str) -> str:
+    """Map a free-text contract note to one of a small set of
+    semantic labels for diff display."""
+    for label, prefix in _NOTE_PATTERNS:
+        if prefix in note:
+            return label
+    return "other"
+
+
+def _op_one_line(op: Operation) -> str:
+    """Compact human-readable summary of an op for diff output."""
+    a = op.args
+    if op.op == "update_consumer":
+        return f"`update_consumer` artifact={a.get('artifact', '?')}"
+    if op.op == "modify_node":
+        return f"`modify_node` node={a.get('name', '?')}"
+    if op.op == "add_node":
+        return f"`add_node` name={a.get('name', '?')}"
+    if op.op == "add_edge":
+        return (
+            f"`add_edge` {a.get('parent', '?')} → {a.get('child', '?')}"
+        )
+    if op.op == "add_contract":
+        return (
+            f"`add_contract` consumer={a.get('consumer', '?')} "
+            f"id={a.get('contract_id', '?')}"
+        )
+    return f"`{op.op}` {a}"

@@ -155,10 +155,19 @@ Add to your Claude Code MCP config (typically
 }
 ```
 
-The server exposes one tool, `plan`, which takes `spec_path`,
-`manifest_path`, optional `bi_path`, and optional `top`. Returns
-serialized plans, rejections, and (on subsequent calls for the same
-spec) a markdown diff vs the previous run.
+The server exposes three tools:
+
+- **`plan(spec_path, manifest_path, bi_path?, top?)`** — the main
+  one. Returns serialized spec, ranked plans, rejections, and (on
+  subsequent calls for the same spec) a markdown diff vs the
+  previous run.
+- **`validate_spec(spec_path)`** — checks whether the spec parses
+  cleanly. Useful between an LLM-driven spec edit and the next
+  `plan` call so the LLM can self-correct invalid edits without
+  round-tripping through a planner failure.
+- **`discover_specs(root_path)`** — walks a directory, returns
+  spec paths grouped by kind and id. Lets the LLM find specs
+  without the AE having to recite paths.
 
 The CLI commands below remain available for power users, CI, and
 debugging — but the MCP server is the headline integration.
