@@ -297,44 +297,72 @@ patching the hand-coded planner further.
 
 ## Coverage of real AE work — empirical signal
 
-`experiments/pr_classification.md` classifies 50 recent merged PRs
-from `mattermost/mattermost-data-warehouse` (`transform/mattermost-
-analytics/`, ~Aug 2024–Apr 2025) by which dagwright spec kinds the
-change touches. Headline:
+Two studies in `experiments/pr_classification.md` (mattermost) and
+`experiments/pr_classification_cal_itp.md` (cal-itp/data-infra).
+50 recent merged PRs from each, same rubric, judgment-driven
+classification. Aggregate:
 
-- **52%** fit a single existing dagwright kind cleanly (mostly
-  `metric_request`, which alone touches 54% of PRs).
-- **16%** are genuinely compositional within today's two kinds —
-  the case `change_bundle` is supposed to cover.
-- **32%** sit outside today's slice, distributed across a long tail
-  of small kinds: source/seed additions (16%), dependency repoints
-  (10%), materialisation changes (8%), structural splits (6%),
-  renames and drops (4% each), exposures-only edits, freshness
-  config, etc.
+| Category | Mattermost | cal-itp |
+|---|---|---|
+| dagwright_single_kind (covered today) | 52% | 36% |
+| dagwright_composable_multi_kind (`change_bundle`) | 16% | 10% |
+| outside_slice (today's two kinds don't reach) | 32% | 54% |
+| **In-slice today + composable** | **68%** | **46%** |
+
+Per-kind ordering — `metric_request` and `definitional_change`
+are the top two in **both** projects, just with different weights:
+
+| Kind | Mattermost | cal-itp |
+|---|---|---|
+| metric_request | 54% | 30% |
+| definitional_change | 24% | 38% |
+| materialization_change | 8% | 22% |
+| add_source_or_seed | 16% | 14% |
+| dependency_repoint | 10% | 2% |
+
+Mean kinds per AE PR: 1.42 / 1.34. Median in both: 1.
 
 Implications for widening priorities:
 
-1. The two existing kinds are **good picks**: `metric_request`
-   alone is the single most common pattern. Investment to deepen
-   metric_request and definitional_change pays off immediately.
-2. `change_bundle` is **a worthwhile widening, not a transformative
-   one** — it extends coverage from ~52% to ~68%. The remaining
-   32% requires new kinds, not just composition.
-3. The long-tail kinds are individually small (≤16% each) and
-   collectively large (~32%). Adding all of them is several quarters
-   of planner work; prioritising by use-case importance matters
-   more than count.
-4. Mean kinds per AE PR is **1.42** — most changes are single-kind.
-   The "compositions everywhere" intuition the dau_desktop_only
-   case suggested isn't supported at scale; compositions are real
-   but median PRs are simpler.
+1. "dagwright covers ~half of routine AE work" is roughly right
+   **but project-dependent** — in-slice share ranges 46–68% across
+   the two samples. Quote a range, not a number.
+2. The two existing kinds are **good picks**: they hold the top two
+   slots in both projects regardless of business domain. Mattermost
+   leans `metric_request`-heavy (new fields, new marts); cal-itp
+   leans `definitional_change`-heavy (redefining existing semantics
+   in payment / GTFS pipelines). Both flavours fit.
+3. `change_bundle` is **a worthwhile but modest widening** —
+   10–16% of PRs would exercise it. Real demand exists; it's not
+   the bulk.
+4. **`materialization_change` is the strongest candidate for the
+   next new kind**. 8% of Mattermost PRs, 22% of cal-itp PRs (the
+   latter inflated by an in-flight microbatch migration but real
+   even at steady-state). It's persistently in the long tail and
+   occasionally dominant.
+5. Beyond `materialization_change`, the long-tail kinds are
+   individually small (≤16% each) and collectively significant.
+   Prioritisation by use-case importance matters more than count.
+6. Mean 1.34–1.42 kinds per AE PR with median 1: most changes are
+   single-kind. The "compositions everywhere" intuition the
+   dau_desktop_only case suggested isn't supported at scale;
+   compositions are real but median PRs are simpler than that.
 
-Caveats in `experiments/pr_classification.md`: judgment-driven
-classification with ~6–8 disputable calls; the dominant ambiguity
-is whether new sources count as independent kinds when they ship
-alongside a new metric. Treating source-additions as part-of-metric
-drops the multi-kind share from 16% to ~6%.
+Caveats:
+
+- Judgment-driven; ~7–10 PRs of 50 are disputable in each project.
+- Dominant ambiguity: whether `add_source` is independent when
+  shipped alongside a new metric. Treating source-adds as
+  part-of-metric drops Mattermost multi-kind 16% → 6% and cal-itp
+  10% → 4%.
+- **Snapshot vs steady-state.** cal-itp's outside-slice share is
+  inflated by a microbatch migration. Stripped out, in-slice
+  rebounds to ~58%. Project-shape and time-window effects are real.
+- N=50 per project; standard errors ~7 pp. A third project would
+  tighten the band; gitlab-data/analytics was the original target
+  but is no longer publicly accessible.
 
 This empirical signal post-dates the design choices the planner is
-built around; it largely validates them. It also says the path to
-broader coverage is more about new kinds than richer composition.
+built around; it largely validates them. The path to broader
+coverage looks more like "add `materialization_change` and one or
+two long-tail kinds carefully" than "lean hard on composition."
