@@ -374,12 +374,52 @@ Effort: ~half a day on top of the populated DB setup. Genuinely
 strong receipt — moves outcome equivalence from "anecdotal" to
 "data-level on jaffle_shop, untested elsewhere."
 
+### PR-classification study — `pr_classification.md`
+
+Empirical study answering: *what fraction of real AE PRs would
+require composition (multiple spec kinds) versus fit a single
+dagwright kind?* See the linked file for the full report (50 PRs,
+~Aug 2024–Apr 2025, mattermost-data-warehouse).
+
+Headline finding:
+
+| Category | % of AE-relevant PRs |
+|---|---|
+| dagwright_single_kind (covered today) | **52%** |
+| dagwright_composable_multi_kind (needs `change_bundle`) | **16%** |
+| outside_slice (single or multi) | **32%** |
+
+Mean kinds per AE PR: **1.42**. Median: **1**.
+
+Per-kind frequency: `metric_request` 54%, `definitional_change` 24%,
+`add_source_or_seed` 16%, `dependency_repoint` 10%, materialisation
+changes 8%, structural splits 6%, renames/drops 4% each, etc.
+
+Implications:
+
+- dagwright **today** plausibly covers ~half of routine AE work.
+- `change_bundle` (June 30 milestone) extends coverage to ~68%.
+- The remaining ~32% is a long tail of small kinds (sources,
+  materialisation, dependency repoints, structural splits/merges,
+  drops, renames). To cover them all would need 6–8 new spec kinds.
+- "Compositions are how real AE work happens" is **partially**
+  supported: the median PR is single-kind, but ~16% of AE PRs are
+  genuinely compositional within dagwright's existing two kinds —
+  enough to make `change_bundle` a worthwhile widening, not enough
+  to justify framing single-kind specs as a corner case.
+
+Caveats: judgment-driven classification (~6–8 PRs of 50 are
+disputable); the dominant ambiguity is "is `add_source` independent
+of the metric_request that uses it?" Treating source-additions as
+part-of-metric drops multi-kind from 16% to ~6%.
+
 ## Future experiments
 
 - **A** — head-to-head with a quality rubric (2–3 days, including
   rubric design). **Unblocked now that B has produced iteration
   data**; A scores convergence quality across the same iteration
   count to test whether the cost saving comes at a quality cost.
+  *Run as v1/v2/v3, see commits 29ef6f8 / 697ee97 / 6ceb40b.*
 - **B′** — same per-iteration measurement, but orchestrated through
   Claude Code subagents (with vs without the dagwright MCP server)
   instead of raw SDK calls. Closer to deployment framing; noisier

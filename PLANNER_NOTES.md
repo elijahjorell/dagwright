@@ -294,3 +294,47 @@ are simultaneously true:
 Until then, prefer widening the hand-coded planner one boundary at
 a time. When the threshold is crossed, prefer a clean rewrite over
 patching the hand-coded planner further.
+
+## Coverage of real AE work — empirical signal
+
+`experiments/pr_classification.md` classifies 50 recent merged PRs
+from `mattermost/mattermost-data-warehouse` (`transform/mattermost-
+analytics/`, ~Aug 2024–Apr 2025) by which dagwright spec kinds the
+change touches. Headline:
+
+- **52%** fit a single existing dagwright kind cleanly (mostly
+  `metric_request`, which alone touches 54% of PRs).
+- **16%** are genuinely compositional within today's two kinds —
+  the case `change_bundle` is supposed to cover.
+- **32%** sit outside today's slice, distributed across a long tail
+  of small kinds: source/seed additions (16%), dependency repoints
+  (10%), materialisation changes (8%), structural splits (6%),
+  renames and drops (4% each), exposures-only edits, freshness
+  config, etc.
+
+Implications for widening priorities:
+
+1. The two existing kinds are **good picks**: `metric_request`
+   alone is the single most common pattern. Investment to deepen
+   metric_request and definitional_change pays off immediately.
+2. `change_bundle` is **a worthwhile widening, not a transformative
+   one** — it extends coverage from ~52% to ~68%. The remaining
+   32% requires new kinds, not just composition.
+3. The long-tail kinds are individually small (≤16% each) and
+   collectively large (~32%). Adding all of them is several quarters
+   of planner work; prioritising by use-case importance matters
+   more than count.
+4. Mean kinds per AE PR is **1.42** — most changes are single-kind.
+   The "compositions everywhere" intuition the dau_desktop_only
+   case suggested isn't supported at scale; compositions are real
+   but median PRs are simpler.
+
+Caveats in `experiments/pr_classification.md`: judgment-driven
+classification with ~6–8 disputable calls; the dominant ambiguity
+is whether new sources count as independent kinds when they ship
+alongside a new metric. Treating source-additions as part-of-metric
+drops the multi-kind share from 16% to ~6%.
+
+This empirical signal post-dates the design choices the planner is
+built around; it largely validates them. It also says the path to
+broader coverage is more about new kinds than richer composition.
