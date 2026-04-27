@@ -295,74 +295,19 @@ Until then, prefer widening the hand-coded planner one boundary at
 a time. When the threshold is crossed, prefer a clean rewrite over
 patching the hand-coded planner further.
 
-## Coverage of real AE work — empirical signal
+## Coverage of real AE work — exploratory priors
 
-Two studies in `experiments/pr_classification.md` (mattermost) and
-`experiments/pr_classification_cal_itp.md` (cal-itp/data-infra).
-50 recent merged PRs from each, same rubric, judgment-driven
-classification. Aggregate:
+Two synthetic PR-classification studies (Mattermost, cal-itp) live
+under `experiments/research/`. They produced unweighted priors:
+in-slice share 46–68% with composition; top two kinds match
+dagwright's existing taxonomy across both projects;
+`materialization_change` is the strongest next-kind candidate by
+PR-count signal.
 
-| Category | Mattermost | cal-itp |
-|---|---|---|
-| dagwright_single_kind (covered today) | 52% | 36% |
-| dagwright_composable_multi_kind (`change_bundle`) | 16% | 10% |
-| outside_slice (today's two kinds don't reach) | 32% | 54% |
-| **In-slice today + composable** | **68%** | **46%** |
-
-Per-kind ordering — `metric_request` and `definitional_change`
-are the top two in **both** projects, just with different weights:
-
-| Kind | Mattermost | cal-itp |
-|---|---|---|
-| metric_request | 54% | 30% |
-| definitional_change | 24% | 38% |
-| materialization_change | 8% | 22% |
-| add_source_or_seed | 16% | 14% |
-| dependency_repoint | 10% | 2% |
-
-Mean kinds per AE PR: 1.42 / 1.34. Median in both: 1.
-
-Implications for widening priorities:
-
-1. "dagwright covers ~half of routine AE work" is roughly right
-   **but project-dependent** — in-slice share ranges 46–68% across
-   the two samples. Quote a range, not a number.
-2. The two existing kinds are **good picks**: they hold the top two
-   slots in both projects regardless of business domain. Mattermost
-   leans `metric_request`-heavy (new fields, new marts); cal-itp
-   leans `definitional_change`-heavy (redefining existing semantics
-   in payment / GTFS pipelines). Both flavours fit.
-3. `change_bundle` is **a worthwhile but modest widening** —
-   10–16% of PRs would exercise it. Real demand exists; it's not
-   the bulk.
-4. **`materialization_change` is the strongest candidate for the
-   next new kind**. 8% of Mattermost PRs, 22% of cal-itp PRs (the
-   latter inflated by an in-flight microbatch migration but real
-   even at steady-state). It's persistently in the long tail and
-   occasionally dominant.
-5. Beyond `materialization_change`, the long-tail kinds are
-   individually small (≤16% each) and collectively significant.
-   Prioritisation by use-case importance matters more than count.
-6. Mean 1.34–1.42 kinds per AE PR with median 1: most changes are
-   single-kind. The "compositions everywhere" intuition the
-   dau_desktop_only case suggested isn't supported at scale;
-   compositions are real but median PRs are simpler than that.
-
-Caveats:
-
-- Judgment-driven; ~7–10 PRs of 50 are disputable in each project.
-- Dominant ambiguity: whether `add_source` is independent when
-  shipped alongside a new metric. Treating source-adds as
-  part-of-metric drops Mattermost multi-kind 16% → 6% and cal-itp
-  10% → 4%.
-- **Snapshot vs steady-state.** cal-itp's outside-slice share is
-  inflated by a microbatch migration. Stripped out, in-slice
-  rebounds to ~58%. Project-shape and time-window effects are real.
-- N=50 per project; standard errors ~7 pp. A third project would
-  tighten the band; gitlab-data/analytics was the original target
-  but is no longer publicly accessible.
-
-This empirical signal post-dates the design choices the planner is
-built around; it largely validates them. The path to broader
-coverage looks more like "add `materialization_change` and one or
-two long-tail kinds carefully" than "lean hard on composition."
+These are **not load-bearing** for any external pitch and the
+findings are explicitly held back from CHARTER / README / deck.
+The framing they're missing — degradation-weighting per kind
+rather than raw PR count — is captured in
+`experiments/research/README.md`. Author intends to validate
+against a real-world dbt project before treating any of this as
+receipt-grade evidence.

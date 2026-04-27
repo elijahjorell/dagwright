@@ -374,73 +374,15 @@ Effort: ~half a day on top of the populated DB setup. Genuinely
 strong receipt — moves outcome equivalence from "anecdotal" to
 "data-level on jaffle_shop, untested elsewhere."
 
-### PR-classification study — `pr_classification.md` + `pr_classification_cal_itp.md`
+### Exploratory: PR-classification studies
 
-Empirical study answering: *what fraction of real AE PRs would
-require composition (multiple spec kinds) versus fit a single
-dagwright kind?* Two-project replication.
-
-| Category | Mattermost (N=50) | cal-itp (N=50) |
-|---|---|---|
-| dagwright_single_kind (covered today) | **52%** | **36%** |
-| dagwright_composable_multi_kind (needs `change_bundle`) | **16%** | **10%** |
-| outside_slice (single or multi) | **32%** | **54%** |
-| **Total in-slice today + composable** | **68%** | **46%** |
-
-Mean kinds per AE PR: Mattermost **1.42** / cal-itp **1.34**.
-Median in both: **1**.
-
-**Per-kind frequency (top 5):**
-
-| Kind | Mattermost | cal-itp |
-|---|---|---|
-| `metric_request` | 54% | 30% |
-| `definitional_change` | 24% | 38% |
-| `add_source_or_seed` | 16% | 14% |
-| `materialization_change` | 8% | **22%** |
-| `dependency_repoint` | 10% | 2% |
-
-Implications:
-
-- "dagwright covers ~half of routine AE work" is roughly right but
-  **project-dependent**: in-slice share ranges 46–68% across the
-  two samples. Don't quote a single number externally; quote a
-  range.
-- `change_bundle` is a worthwhile but **modest** widening at
-  10–16% of PRs. Real demand exists; it's not the bulk.
-- The **outside-slice tail is bigger and more variable** than the
-  Mattermost-only data suggested. cal-itp's 54% outside is driven
-  largely by `materialization_change` (22% of PRs) — a microbatch
-  migration in flight when this sample was taken.
-- The strategic implication: **`materialization_change` is a
-  stronger candidate for the next kind** than the Mattermost data
-  alone suggested. Its frequency varies (8% steady-state to 22%
-  during a migration); it's persistently inside the long tail and
-  occasionally dominant.
-- Top two kinds (`metric_request`, `definitional_change`) hold the
-  top two slots in **both** projects, just with different relative
-  weights — Mattermost leans toward adding new fields, cal-itp
-  leans toward redefining existing semantics. Both flavours of
-  AE work fit dagwright's existing kinds.
-- "Compositions are how real AE work happens" is **further weakened**
-  at scale: median PR is single-kind in both projects; mean is
-  1.34–1.42. Compositions are real but a clear minority.
-
-Caveats:
-
-- Judgment-driven classification — ~7–10 PRs of each 50 are
-  disputable. The dominant ambiguity is whether `add_source` is
-  independent when shipped alongside a new metric. Treating
-  source-adds as part-of-metric drops multi-kind in Mattermost
-  from 16% → 6% and cal-itp from 10% → 4%.
-- **Snapshot vs steady-state.** cal-itp's outside-slice share is
-  inflated by an in-flight microbatch migration (22% of recent
-  PRs). Stripped out, in-slice rebounds to ~58% — close to
-  Mattermost. Project-shape effects are real and time-windowed.
-- N=50 per project; standard errors ~7 pp.
-- Only two projects. A third public dbt project would tighten the
-  band further; gitlab-data/analytics was the original target but
-  is no longer publicly accessible.
+Two synthetic studies (Mattermost, cal-itp) classifying real-world
+dbt PRs by which dagwright spec kinds they touch. Useful priors
+about real-world AE workload distribution, but **not currently
+load-bearing in any external pitch** — see `research/README.md`
+for findings, the degradation-weighting framing the unweighted
+counts miss, and a checklist for validating against a real
+project. Treat the numbers there as priors, not receipts.
 
 ## Future experiments
 
