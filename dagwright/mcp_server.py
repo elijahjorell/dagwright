@@ -34,7 +34,54 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("dagwright")
+_SERVER_INSTRUCTIONS = """\
+You are using the dagwright MCP server to plan architectural changes
+to a dbt project on the user's behalf. The user (an analytics engineer)
+describes a change in plain English; you translate that into a
+dagwright spec, ask dagwright to compile it into ranked plans, and
+render the plans back to the user. The user iterates on the plans, not
+on the YAML.
+
+WORKFLOW (first call on a project):
+  1. summarize_manifest(manifest_path) — get oriented. Do NOT read
+     manifest.json directly; it can be multi-MB.
+  2. get_spec_schema() — fetch the canonical vocabulary for spec
+     kinds. Pick the kind that matches the user's request:
+       - metric_request: a new metric or mart built from existing
+         models.
+       - definitional_change: change the meaning of an existing
+         column or expression and decide what happens to consumers.
+  3. discover_specs(root_path) if specs may already exist for this
+     project. Otherwise write a new spec at a path like
+     <project>/specs/<short_id>.yaml.
+  4. validate_spec(spec_path). Fix any errors. Do NOT call plan
+     until validation passes — you will burn an iteration.
+  5. plan(spec_path, manifest_path, bi_path?, top=4). Render a
+     prose recommendation: which plan you would pick, why, what the
+     tradeoffs are, what blast radius is worth flagging.
+
+WORKFLOW (subsequent iterations, same session):
+  - The user responds with a refinement ("drop consumer X from
+    must_migrate", "what if the parent were Y"). Edit the spec YAML
+    directly. Re-validate. Re-plan.
+  - The plan response includes a `diff` field — a markdown summary
+    of what changed vs the previous run on this spec. Surface it.
+    That delta is the whole point of this workflow.
+
+HARD RULES:
+  - The user does NOT read the YAML during the inner loop. You edit
+    it; they read plans + diffs.
+  - If plan returns zero plans, that means "no plan in the planner's
+    current slice reaches the desired state" — do NOT fabricate one.
+    Tell the user, and name the boundary the candidates are falling
+    outside (single-parent, single-hop, add-only,
+    declared-schema-with-synonyms, date-detection-heuristic, or
+    fixed-operation-template).
+  - Do NOT call out to other LLM tools to "improve" the plan. The
+    plan dagwright returns is the artifact.
+"""
+
+mcp = FastMCP("dagwright", instructions=_SERVER_INSTRUCTIONS)
 
 # Modules whose mtimes we track for hot-reload. Order matters:
 # state and loaders have no internal deps; planner imports from

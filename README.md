@@ -130,95 +130,140 @@ before trusting a "no plans" output.
 
 ## Install
 
-Requires Python 3.10+ and `uv`.
+Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) (works
+on macOS, Linux, and Windows). One command — no clone, no venv:
 
-```bash
-git clone https://github.com/elijahjorell/dagwright
-cd dagwright
-uv venv
-uv pip install -e .
+```
+uv tool install git+https://github.com/elijahjorell/dagwright
 ```
 
-## Usage
+This puts a `dagwright` binary on your PATH. Verify:
 
-```bash
-# Single-spec, jaffle_shop fixture
-uv run dagwright plan \
-  --spec tests/jaffle_shop/specs/new_customers_monthly.yaml \
-  --manifest tests/jaffle_shop/manifest.json \
-  --bi tests/jaffle_shop/metabase.json \
-  --format markdown
-
-# Real-world manifest with in-tree dbt exposures as the BI graph
-# (no --bi needed; reads manifest.exposures directly)
-uv run dagwright plan \
-  --spec tests/mattermost/specs/dau_desktop_only.yaml \
-  --manifest tests/mattermost/manifest.json \
-  --format markdown
+```
+dagwright --help
 ```
 
-Emits ranked plans annotated with operations, contracts, invariants,
-blast radius (BI consumers + dbt downstream models), and tradeoffs.
-`--format json` and `--format both` also supported. Output is stable
-across runs given identical inputs.
+To upgrade later: `uv tool upgrade dagwright`. To uninstall:
+`uv tool uninstall dagwright`.
 
-See `specs/schema.md` for the spec shape.
+For local development (clone + editable install) see the contributor
+section at the bottom of this README.
 
-### MCP server (the AE-facing surface)
+## Quickstart — AE workflow via Claude
 
-Real AEs don't run terminal commands. They talk to Claude. dagwright
-exposes itself as an MCP (Model Context Protocol) server so any
-MCP-aware LLM client — Claude Code, Claude Desktop, Cursor — can
-invoke it as a tool. The AE describes a change in chat; Claude edits
-the spec and calls dagwright; plans + diff render inline.
+The headline integration is the MCP server. The AE describes a
+change to Claude in plain English; Claude calls dagwright; plans and
+diffs render inline. The AE never touches YAML during the inner loop.
 
-Add to your Claude Code MCP config (typically
-`~/.claude/claude_desktop_config.json` or your IDE's equivalent):
+**1. Wire dagwright into your MCP-aware client.**
+
+Claude Code (any OS):
+
+```
+claude mcp add dagwright dagwright mcp
+```
+
+Claude Desktop, Cursor, or anything else that reads an
+`mcpServers` JSON block — add this entry to its config file:
 
 ```json
 {
   "mcpServers": {
     "dagwright": {
-      "command": "uv",
-      "args": ["run", "--project", "/absolute/path/to/dagwright", "dagwright", "mcp"]
+      "command": "dagwright",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-The server exposes five tools:
+Config file locations for Claude Desktop:
 
-- **`plan(spec_path, manifest_path, bi_path?, top?)`** — the main
-  one. Returns serialized spec, ranked plans, rejections, and (on
-  subsequent calls for the same spec) a markdown diff vs the
-  previous run.
-- **`validate_spec(spec_path)`** — checks whether the spec parses
-  cleanly. Useful between an LLM-driven spec edit and the next
-  `plan` call so the LLM can self-correct invalid edits without
-  round-tripping through a planner failure.
-- **`get_spec_schema(kind?)`** — machine-readable schema for one or
-  all spec kinds: required/optional fields, enum values, regex
-  patterns, shape rules, context lookups, and a canonical example.
-  Call once per session before authoring or editing a spec so the
-  LLM has the canonical vocabulary in context rather than
-  discovering it by reading `specs/schema.md` or by making a wrong
-  edit and reading the validate_spec error.
-- **`discover_specs(root_path)`** — walks a directory, returns
-  spec paths grouped by kind and id. Lets the LLM find specs
-  without the AE having to recite paths.
-- **`summarize_manifest(manifest_path)`** — compact summary of a dbt
-  manifest (project name, dbt version, models by layer, marts list,
-  exposures). Lets the LLM orient in a new project without ingesting
-  the full multi-MB JSON. ~12 KB summary vs ~6 MB raw manifest on
-  the Mattermost fixture.
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
 
-The CLI commands below remain available for power users, CI, and
-debugging — but the MCP server is the headline integration.
+Restart the client. The server ships its own usage protocol via the
+MCP `instructions` channel, so Claude reads how to use dagwright on
+connect — you don't need to memorise the tool list or paste a primer.
+
+**2. Make sure your dbt manifest is compiled.**
+
+dagwright reads `manifest.json`. If you don't have one:
+
+```
+dbt compile  # or `dbt parse` for a faster manifest-only pass
+```
+
+**3. Ask Claude.**
+
+Open a chat in your dbt project (or any project — paste absolute
+paths if you're elsewhere) and say something like:
+
+> Use dagwright to plan a new monthly-active-customers mart. The
+> manifest is at `target/manifest.json`. The growth team's Looker
+> dashboard is the consumer that matters.
+
+Claude will summarise the manifest, fetch the spec schema, write a
+spec, validate it, call `plan`, and render a recommendation. Reply
+with refinements ("drop consumer X", "what if the parent were Y")
+and Claude will edit the spec and re-plan; each subsequent
+recommendation includes a diff vs the previous one.
+
+If `plan` returns zero plans, that means "no plan in the planner's
+current slice reaches the desired state" — see `PLANNER_NOTES.md`
+for the slice's bounds. Claude will tell you which boundary the
+candidates fell outside.
+
+The five MCP tools the server exposes (Claude calls these for you):
+
+- **`plan`** — compile a validated spec into ranked plans, with a
+  diff vs the previous call on the same spec.
+- **`validate_spec`** — schema-check a spec before planning.
+- **`get_spec_schema`** — canonical vocabulary for spec kinds.
+- **`discover_specs`** — find existing specs in a directory.
+- **`summarize_manifest`** — ~12 KB summary of a multi-MB manifest
+  so Claude can orient without ingestion.
+
+## CLI (power users, CI, debugging)
+
+The CLI is the same engine the MCP server wraps. Useful for CI gates,
+bulk sweeps, and debugging.
+
+```
+dagwright plan \
+  --spec path/to/spec.yaml \
+  --manifest path/to/manifest.json \
+  --format markdown
+```
+
+`--bi path/to/bi.json` if you have an out-of-tree BI consumer
+graph; otherwise dagwright reads `manifest.exposures` directly.
+`--format json` and `--format both` also supported. Output is stable
+across runs given identical inputs.
+
+Worked examples against the bundled fixtures (clone the repo for
+these — they live under `tests/`):
+
+```
+dagwright plan \
+  --spec tests/jaffle_shop/specs/new_customers_monthly.yaml \
+  --manifest tests/jaffle_shop/manifest.json \
+  --bi tests/jaffle_shop/metabase.json \
+  --format markdown
+
+dagwright plan \
+  --spec tests/mattermost/specs/dau_desktop_only.yaml \
+  --manifest tests/mattermost/manifest.json \
+  --format markdown
+```
+
+See `specs/schema.md` for the spec shape.
 
 ### Watch mode (the iteration-loop UX)
 
-```bash
-uv run dagwright watch \
+```
+dagwright watch \
   --spec tests/jaffle_shop_modern/specs/lifetime_spend_pretax.yaml \
   --manifest tests/jaffle_shop_modern/manifest.json \
   --bi tests/jaffle_shop_modern/metabase.json \
@@ -251,6 +296,36 @@ watcher; `Ctrl+C` exits cleanly.
 - `specs/` — spec schema documentation.
 - `tests/` — OSS dbt projects as fixtures (`jaffle_shop`,
   `jaffle_shop_modern`, `mattermost`).
+
+## Contributing / local development
+
+For an editable install against a clone of the repo:
+
+```
+git clone https://github.com/elijahjorell/dagwright
+cd dagwright
+uv venv
+uv pip install -e ".[experiments]"   # omit [experiments] if you don't need the harness
+```
+
+Then point your MCP client at the local checkout instead of the
+installed binary:
+
+```json
+{
+  "mcpServers": {
+    "dagwright": {
+      "command": "uv",
+      "args": ["run", "--project", "/absolute/path/to/dagwright", "dagwright", "mcp"]
+    }
+  }
+}
+```
+
+The MCP server hot-reloads `planner` / `diff` / `loaders` / `state`
+on each tool call, so you can edit those modules without restarting
+your client. New tool registrations or edits to `mcp_server.py`
+itself still need a restart.
 
 ## Working name
 
